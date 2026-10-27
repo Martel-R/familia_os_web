@@ -46,6 +46,23 @@ interface ContrachequeExtraido {
   itens: ItemContracheque[]
 }
 
+interface TransacaoDocumento {
+  data?: string
+  descricao: string
+  categoria_sugerida?: string
+  tipo: string
+  valor: number
+}
+
+interface DocumentoFinanceiroExtraido {
+  tipo_documento: string
+  instituicao?: string
+  periodo_referencia?: string
+  data_vencimento_fatura?: string
+  valor_total?: number
+  transacoes: TransacaoDocumento[]
+}
+
 export default function FinancasPage() {
   const [transacoes, setTransacoes] = useState<Transacao[]>([])
   const [cofrinhos, setCofrinhos] = useState<Cofrinho[]>([])
@@ -81,6 +98,15 @@ export default function FinancasPage() {
   const [contaContrachequeId, setContaContrachequeId] = useState('')
   const [salvandoContracheque, setSalvandoContracheque] = useState(false)
 
+  // Modal de Importação de Extrato Bancário / Fatura de Cartão
+  const [modalDocAberto, setModalDocAberto] = useState(false)
+  const [arquivoDoc, setArquivoDoc] = useState<File | null>(null)
+  const [analisandoDoc, setAnalisandoDoc] = useState(false)
+  const [dadosDoc, setDadosDoc] = useState<DocumentoFinanceiroExtraido | null>(null)
+  const [contaDocId, setContaDocId] = useState('')
+  const [transacoesSelecionadas, setTransacoesSelecionadas] = useState<number[]>([])
+  const [salvandoDoc, setSalvandoDoc] = useState(false)
+
   // Modal de Edição de Transação
   const [transacaoEditando, setTransacaoEditando] = useState<Transacao | null>(null)
   const [editDescricao, setEditDescricao] = useState('')
@@ -102,10 +128,11 @@ export default function FinancasPage() {
 
       if (contasData) {
         setContas(contasData)
-        if (contasData.length > 0 && !contaIdSelecionada) {
-          setContaIdSelecionada(contasData[0].id)
-          setContaAporteId(contasData[0].id)
-          setContaContrachequeId(contasData[0].id)
+        if (contasData.length > 0) {
+          if (!contaIdSelecionada) setContaIdSelecionada(contasData[0].id)
+          if (!contaAporteId) setContaAporteId(contasData[0].id)
+          if (!contaContrachequeId) setContaContrachequeId(contasData[0].id)
+          if (!contaDocId) setContaDocId(contasData[0].id)
         }
       }
 
@@ -196,7 +223,7 @@ export default function FinancasPage() {
 
       if (errCofre) throw errCofre
 
-      // 2. Atualizar saldo da conta bancária vinculada (se selecionada)
+      // 2. Atualizar saldo da conta bancária vinculada
       if (contaAporteId) {
         const contaAlvo = contas.find((c) => c.id === contaAporteId)
         if (contaAlvo) {
@@ -280,7 +307,6 @@ export default function FinancasPage() {
       if (error) {
         alert('Erro ao salvar no Supabase: ' + error.message)
       } else if (data) {
-        // Atualizar saldo da conta caso já esteja pago
         if (contaIdSelecionada) {
           const contaAlvo = contas.find((c) => c.id === contaIdSelecionada)
           if (contaAlvo) {
@@ -422,7 +448,6 @@ export default function FinancasPage() {
 
       await supabase.from('transacoes_financeiras').insert([novaReceita])
 
-      // Creditar saldo na conta escolhida
       if (contaContrachequeId) {
         const contaAlvo = contas.find((c) => c.id === contaContrachequeId)
         if (contaAlvo) {
@@ -447,37 +472,109 @@ export default function FinancasPage() {
     }
   }
 
-  // Inicializar contas e cofrinhos se vazios
-  const semearExemplos = async () => {
-    setSalvando(true)
+  // Importar Extrato Bancário ou Fatura de Cartão
+  const analisarDocumentoIA = async () => {
+    if (!arquivoDoc || analisandoDoc) return
+
+    setAnalisandoDoc(true)
     try {
-      const contasIniciais = [
-        { nome: 'Nubank Principal', instituicao: 'Nubank', saldo_atual: 4250.0 },
-        { nome: 'Itaú Família', instituicao: 'Itaú', saldo_atual: 1800.0 },
-        { nome: 'Carteira / Dinheiro', instituicao: 'Dinheiro', saldo_atual: 350.0 },
-      ]
-      const { data: contasCriadas } = await supabase
-        .from('contas_bancarias')
-        .insert(contasIniciais)
-        .select()
+      const formData = new FormData()
+      formData.append('file', arquivoDoc)
 
-      const contaPadraoId = contasCriadas ? contasCriadas[0].id : null
+      const response = await fetch('/api/ocr/financial-doc', {
+        method: 'POST',
+        body: formData,
+      })
 
-      const cofrinhosExemplo = [
-        { nome: '🏖️ Férias de Verão', meta_valor: 10000.0, saldo_atual: 7000.0, icone: '🏖️' },
-        { nome: '🛡️ Reserva de Emergência', meta_valor: 20000.0, saldo_atual: 18400.0, icone: '🛡️' },
-      ]
-      await supabase.from('cofrinhos').insert(cofrinhosExemplo)
+      if (!response.ok) {
+        throw new Error(`Falha no processamento (${response.status})`)
+      }
 
-      const transExemplo = [
-        { descricao: 'Salário Principal', tipo: 'receita', valor: 9500.0, data_vencimento: '2026-11-05', status: 'pago', conta_id: contaPadraoId },
-        { descricao: 'Aluguel do Imóvel', tipo: 'despesa_fixa', valor: 2200.0, data_vencimento: '2026-11-10', status: 'pendente', conta_id: contaPadraoId },
-      ]
-      await supabase.from('transacoes_financeiras').insert(transExemplo)
+      const resultado: DocumentoFinanceiroExtraido = await response.json()
+      setDadosDoc(resultado)
+      // Seleciona todas as transações por padrão
+      setTransacoesSelecionadas(resultado.transacoes.map((_, idx) => idx))
+    } catch (err: any) {
+      alert('Erro ao analisar documento com IA: ' + err.message)
+    } finally {
+      setAnalisandoDoc(false)
+    }
+  }
+
+  const toggleTransacaoSelecionada = (idx: number) => {
+    if (transacoesSelecionadas.includes(idx)) {
+      setTransacoesSelecionadas(transacoesSelecionadas.filter((i) => i !== idx))
+    } else {
+      setTransacoesSelecionadas([...transacoesSelecionadas, idx])
+    }
+  }
+
+  const salvarDocumentoFinal = async () => {
+    if (!dadosDoc || !arquivoDoc || salvandoDoc || transacoesSelecionadas.length === 0) return
+
+    setSalvandoDoc(true)
+    try {
+      // 1. Upload do documento para o Supabase Storage
+      const extensao = arquivoDoc.name.split('.').pop() || 'pdf'
+      const pasta = dadosDoc.tipo_documento === 'fatura_cartao' ? 'faturas' : 'extratos'
+      const nomeArquivo = `${pasta}/${Date.now()}_${dadosDoc.tipo_documento}.${extensao}`
+
+      await supabase.storage
+        .from('familia-os-documentos')
+        .upload(nomeArquivo, arquivoDoc)
+
+      // 2. Filtrar apenas as transações marcadas pelo usuário
+      const transacoesParaInserir = dadosDoc.transacoes
+        .filter((_, idx) => transacoesSelecionadas.includes(idx))
+        .map((t) => {
+          const hoje = new Date().toISOString().split('T')[0]
+          const isFatura = dadosDoc.tipo_documento === 'fatura_cartao'
+          const dataVenc = isFatura
+            ? dadosDoc.data_vencimento_fatura || hoje
+            : t.data || hoje
+
+          return {
+            descricao: isFatura ? `[Cartão] ${t.descricao}` : t.descricao,
+            tipo: (t.tipo === 'receita' ? 'receita' : 'despesa_variavel') as any,
+            valor: Math.abs(t.valor),
+            data_vencimento: dataVenc,
+            data_pagamento: isFatura ? null : t.data || hoje,
+            status: (isFatura ? 'pendente' : 'pago') as any,
+            conta_id: contaDocId || null,
+            observacoes: `Importado via OCR (${dadosDoc.instituicao || 'Documento'}) | Anexo: ${nomeArquivo}`,
+          }
+        })
+
+      const { error: erroInsert } = await supabase
+        .from('transacoes_financeiras')
+        .insert(transacoesParaInserir)
+
+      if (erroInsert) throw erroInsert
+
+      // 3. Atualizar saldo da conta caso seja extrato de conta corrente já pago
+      if (contaDocId && dadosDoc.tipo_documento === 'extrato_bancario') {
+        const delta = transacoesParaInserir.reduce((acc, t) => {
+          return t.tipo === 'receita' ? acc + t.valor : acc - t.valor
+        }, 0)
+
+        const contaAlvo = contas.find((c) => c.id === contaDocId)
+        if (contaAlvo) {
+          await supabase
+            .from('contas_bancarias')
+            .update({ saldo_atual: Number(contaAlvo.saldo_atual || 0) + delta })
+            .eq('id', contaAlvo.id)
+        }
+      }
 
       await carregarDados()
+      setModalDocAberto(false)
+      setArquivoDoc(null)
+      setDadosDoc(null)
+      alert(`Sucesso! ${transacoesParaInserir.length} lançamentos foram importados e salvos no financeiro.`)
+    } catch (err: any) {
+      alert('Erro ao salvar lançamentos no banco: ' + err.message)
     } finally {
-      setSalvando(false)
+      setSalvandoDoc(false)
     }
   }
 
@@ -490,22 +587,20 @@ export default function FinancasPage() {
             Finanças & Fluxo de Caixa
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Contas bancárias, cofrinhos de reserva e fluxo de receitas e despesas.
+            Contas bancárias, cofrinhos, extratos bancários e faturas de cartão conciliados.
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '12px' }}>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           <button onClick={() => setModalContaAberto(true)} className="btn btn-secondary">
-            🏦 + Nova Conta Bancária
+            🏦 + Nova Conta
           </button>
-          <button onClick={() => setModalContrachequeAberto(true)} className="btn btn-primary">
-            📄 Importar Contracheque (IA)
+          <button onClick={() => setModalContrachequeAberto(true)} className="btn btn-secondary">
+            📄 Importar Contracheque
           </button>
-          {contas.length === 0 && !carregando && (
-            <button onClick={semearExemplos} className="btn btn-secondary" disabled={salvando}>
-              🌱 Inicializar Estrutura Padrão
-            </button>
-          )}
+          <button onClick={() => setModalDocAberto(true)} className="btn btn-primary">
+            💳 Importar Fatura / Extrato (IA)
+          </button>
         </div>
       </div>
 
@@ -520,7 +615,7 @@ export default function FinancasPage() {
 
         {contas.length === 0 && !carregando ? (
           <div className="card" style={{ textAlign: 'center', color: 'var(--texto-secundario)', padding: '24px' }}>
-            Nenhuma conta bancária cadastrada. Clique em "+ Nova Conta Bancária" para começar.
+            Nenhuma conta bancária cadastrada. Clique em "+ Nova Conta" para começar.
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px' }}>
@@ -663,6 +758,198 @@ export default function FinancasPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Importação de Fatura de Cartão / Extrato Bancário (IA) */}
+      {modalDocAberto && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '16px',
+          }}
+        >
+          <div className="card" style={{ width: '100%', maxWidth: '780px', maxHeight: '90vh', overflowY: 'auto', backgroundColor: 'var(--bg-card)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>💳 Importar Fatura de Cartão ou Extrato</h2>
+                <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+                  O Gemini 2.5 Flash extrai cada compra individualmente para inserção no fluxo de caixa.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalDocAberto(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label className="form-label">Selecione o arquivo da fatura ou extrato (PDF, PNG ou JPEG):</label>
+              <input
+                type="file"
+                accept=".pdf,image/png,image/jpeg,image/jpg"
+                className="input"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    setArquivoDoc(e.target.files[0])
+                    setDadosDoc(null)
+                  }
+                }}
+              />
+            </div>
+
+            {arquivoDoc && !dadosDoc && (
+              <button
+                type="button"
+                onClick={analisarDocumentoIA}
+                className="btn btn-primary"
+                style={{ width: '100%', marginBottom: '16px' }}
+                disabled={analisandoDoc}
+              >
+                {analisandoDoc ? 'Extraindo compras e movimentações com Gemini 2.5 Flash... 🧠' : '✨ Extrair Transações com IA'}
+              </button>
+            )}
+
+            {dadosDoc && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+                  <div style={{ padding: '12px', borderRadius: 'var(--raio-md)', backgroundColor: 'var(--bg-hover)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>Tipo Detectado</div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', textTransform: 'capitalize' }}>
+                      {dadosDoc.tipo_documento === 'fatura_cartao' ? '💳 Fatura de Cartão' : '🏦 Extrato Bancário'}
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '12px', borderRadius: 'var(--raio-md)', backgroundColor: 'var(--bg-hover)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>Instituição / Banco</div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{dadosDoc.instituicao || 'Identificada'}</div>
+                  </div>
+
+                  <div style={{ padding: '12px', borderRadius: 'var(--raio-md)', backgroundColor: 'var(--bg-hover)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>
+                      {dadosDoc.tipo_documento === 'fatura_cartao' ? 'Vencimento da Fatura' : 'Período'}
+                    </div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                      {dadosDoc.data_vencimento_fatura || dadosDoc.periodo_referencia || 'N/A'}
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '12px', borderRadius: 'var(--raio-md)', backgroundColor: 'var(--bg-hover)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>Valor Total</div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--cor-primaria)' }}>
+                      R$ {Number(dadosDoc.valor_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Vincular estas compras a qual Conta Bancária / Cartão?</label>
+                  <select
+                    className="input"
+                    value={contaDocId}
+                    onChange={(e) => setContaDocId(e.target.value)}
+                  >
+                    <option value="">Selecione uma conta (opcional)</option>
+                    {contas.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nome} (Saldo: R$ {Number(c.saldo_atual || 0).toFixed(2)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Lista de Transações com Seleção Individual */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                      Transações Extraídas ({transacoesSelecionadas.length} de {dadosDoc.transacoes.length} selecionadas):
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (transacoesSelecionadas.length === dadosDoc.transacoes.length) {
+                          setTransacoesSelecionadas([])
+                        } else {
+                          setTransacoesSelecionadas(dadosDoc.transacoes.map((_, i) => i))
+                        }
+                      }}
+                      style={{ background: 'none', border: 'none', color: 'var(--cor-primaria)', fontSize: '0.8rem', cursor: 'pointer' }}
+                    >
+                      {transacoesSelecionadas.length === dadosDoc.transacoes.length ? 'Desmarcar todas' : 'Marcar todas'}
+                    </button>
+                  </div>
+
+                  <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--borda)', borderRadius: 'var(--raio-md)' }}>
+                    <table className="tabela" style={{ fontSize: '0.8rem' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '40px' }}>✓</th>
+                          <th>Data</th>
+                          <th>Estabelecimento / Lançamento</th>
+                          <th>Categoria</th>
+                          <th>Tipo</th>
+                          <th style={{ textAlign: 'right' }}>Valor</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dadosDoc.transacoes.map((t, idx) => {
+                          const selecionado = transacoesSelecionadas.includes(idx)
+                          return (
+                            <tr
+                              key={idx}
+                              onClick={() => toggleTransacaoSelecionada(idx)}
+                              style={{ cursor: 'pointer', backgroundColor: selecionado ? 'var(--cor-primaria-suave)' : 'inherit' }}
+                            >
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={selecionado}
+                                  onChange={() => {}}
+                                  style={{ cursor: 'pointer' }}
+                                />
+                              </td>
+                              <td>{t.data || '-'}</td>
+                              <td style={{ fontWeight: 500 }}>{t.descricao}</td>
+                              <td>{t.categoria_sugerida || 'Geral'}</td>
+                              <td>
+                                <span className={`badge ${t.tipo === 'receita' ? 'badge-success' : 'badge-danger'}`}>
+                                  {t.tipo}
+                                </span>
+                              </td>
+                              <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                                R$ {Number(t.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={salvarDocumentoFinal}
+                  className="btn btn-primary"
+                  style={{ width: '100%', marginTop: '8px' }}
+                  disabled={salvandoDoc || transacoesSelecionadas.length === 0}
+                >
+                  {salvandoDoc
+                    ? 'Salvando no banco e arquivando no Storage...'
+                    : `💾 Confirmar e Inserir ${transacoesSelecionadas.length} Transações no Financeiro`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
