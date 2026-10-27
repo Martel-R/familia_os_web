@@ -49,11 +49,20 @@ export default function FinancasPage() {
   const [dataVencimento, setDataVencimento] = useState('')
 
   // Estado da Importação de Contracheque
-  const [modalAberto, setModalAberto] = useState(false)
+  const [modalContrachequeAberto, setModalContrachequeAberto] = useState(false)
   const [arquivoContracheque, setArquivoContracheque] = useState<File | null>(null)
   const [analisandoIA, setAnalisandoIA] = useState(false)
   const [dadosContracheque, setDadosContracheque] = useState<ContrachequeExtraido | null>(null)
   const [salvandoContracheque, setSalvandoContracheque] = useState(false)
+
+  // Estado da Edição de Transação
+  const [transacaoEditando, setTransacaoEditando] = useState<Transacao | null>(null)
+  const [editDescricao, setEditDescricao] = useState('')
+  const [editValor, setEditValor] = useState('')
+  const [editTipo, setEditTipo] = useState<'receita' | 'despesa_fixa' | 'despesa_variavel' | 'assinatura'>('despesa_variavel')
+  const [editDataVencimento, setEditDataVencimento] = useState('')
+  const [editStatus, setEditStatus] = useState<'pendente' | 'pago' | 'atrasado'>('pendente')
+  const [salvandoEdicao, setSalvandoEdicao] = useState(false)
 
   const carregarDados = async () => {
     try {
@@ -123,6 +132,70 @@ export default function FinancasPage() {
     }
   }
 
+  // Ações de Edição e Exclusão
+  const iniciarEdicao = (t: Transacao) => {
+    setTransacaoEditando(t)
+    setEditDescricao(t.descricao)
+    setEditValor(String(t.valor))
+    setEditTipo(t.tipo)
+    setEditDataVencimento(t.data_vencimento)
+    setEditStatus(t.status)
+  }
+
+  const salvarEdicaoFinal = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!transacaoEditando || !editDescricao || !editValor || !editDataVencimento || salvandoEdicao) return
+
+    setSalvandoEdicao(true)
+    try {
+      const atualizacao = {
+        descricao: editDescricao,
+        valor: parseFloat(editValor),
+        tipo: editTipo,
+        data_vencimento: editDataVencimento,
+        status: editStatus,
+      }
+
+      const { data, error } = await supabase
+        .from('transacoes_financeiras')
+        .update(atualizacao)
+        .eq('id', transacaoEditando.id)
+        .select()
+
+      if (error) {
+        alert('Erro ao atualizar registro: ' + error.message)
+      } else if (data) {
+        setTransacoes(transacoes.map((t) => (t.id === transacaoEditando.id ? data[0] : t)))
+        setTransacaoEditando(null)
+      }
+    } catch (err: any) {
+      alert('Erro inesperado: ' + err.message)
+    } finally {
+      setSalvandoEdicao(false)
+    }
+  }
+
+  const excluirTransacao = async (id: string) => {
+    if (!confirm('Deseja realmente excluir este lançamento financeiro do banco de dados?')) {
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('transacoes_financeiras')
+        .delete()
+        .eq('id', id)
+
+      if (error) {
+        alert('Erro ao excluir: ' + error.message)
+      } else {
+        setTransacoes(transacoes.filter((t) => t.id !== id))
+      }
+    } catch (err: any) {
+      alert('Erro ao excluir registro: ' + err.message)
+    }
+  }
+
   const analisarContrachequeIA = async () => {
     if (!arquivoContracheque || analisandoIA) return
 
@@ -154,7 +227,6 @@ export default function FinancasPage() {
 
     setSalvandoContracheque(true)
     try {
-      // 1. Upload do arquivo para o bucket familia-os-documentos
       const extensao = arquivoContracheque.name.split('.').pop() || 'pdf'
       const nomeArquivo = `contracheques/${Date.now()}_contracheque.${extensao}`
 
@@ -166,7 +238,6 @@ export default function FinancasPage() {
         console.warn('Aviso no upload do Storage:', erroUpload.message)
       }
 
-      // 2. Registrar no Financeiro como Receita
       const competencia = dadosContracheque.mes_ano_referencia || 'Competência Recente'
       const fonte = dadosContracheque.fonte_pagadora || 'Empregador'
       const hoje = new Date().toISOString().split('T')[0]
@@ -195,38 +266,13 @@ export default function FinancasPage() {
       }
 
       alert('Contracheque analisado, salvo no Storage e lançado no Financeiro com sucesso!')
-      setModalAberto(false)
+      setModalContrachequeAberto(false)
       setArquivoContracheque(null)
       setDadosContracheque(null)
     } catch (err: any) {
       alert('Erro ao finalizar importação: ' + err.message)
     } finally {
       setSalvandoContracheque(false)
-    }
-  }
-
-  const semearExemplos = async () => {
-    setSalvando(true)
-    try {
-      const exemplos = [
-        { descricao: 'Salário Principal', tipo: 'receita', valor: 9500.0, data_vencimento: '2026-11-05', status: 'pago' },
-        { descricao: 'Aluguel do Imóvel', tipo: 'despesa_fixa', valor: 2200.0, data_vencimento: '2026-11-10', status: 'pendente' },
-        { descricao: 'Plano de Saúde Familiar', tipo: 'despesa_fixa', valor: 980.0, data_vencimento: '2026-11-15', status: 'pendente' },
-        { descricao: 'Netflix & Streaming', tipo: 'assinatura', valor: 89.9, data_vencimento: '2026-11-18', status: 'pago' },
-      ]
-      await supabase.from('transacoes_financeiras').insert(exemplos)
-
-      const cofrinhosExemplo = [
-        { nome: '🏖️ Férias de Verão', meta_valor: 10000.0, saldo_atual: 7000.0, icone: '🏖️' },
-        { nome: '🛡️ Reserva de Emergência', meta_valor: 20000.0, saldo_atual: 18400.0, icone: '🛡️' },
-      ]
-      await supabase.from('cofrinhos').insert(cofrinhosExemplo)
-
-      await carregarDados()
-    } catch (err: any) {
-      alert('Erro ao inicializar dados: ' + err.message)
-    } finally {
-      setSalvando(false)
     }
   }
 
@@ -243,20 +289,134 @@ export default function FinancasPage() {
         </div>
 
         <div style={{ display: 'flex', gap: '12px' }}>
-          <button onClick={() => setModalAberto(true)} className="btn btn-primary">
+          <button onClick={() => setModalContrachequeAberto(true)} className="btn btn-primary">
             📄 Importar Contracheque (IA)
           </button>
-
-          {transacoes.length === 0 && !carregando && (
-            <button onClick={semearExemplos} className="btn btn-secondary" disabled={salvando}>
-              🌱 Inicializar Exemplos
-            </button>
-          )}
         </div>
       </div>
 
+      {/* Modal de Edição de Transação */}
+      {transacaoEditando && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '16px',
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '540px',
+              backgroundColor: 'var(--bg-card)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>✏️ Editar Lançamento Financeiro</h2>
+              <button
+                type="button"
+                onClick={() => setTransacaoEditando(null)}
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={salvarEdicaoFinal} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Descrição</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={editDescricao}
+                  onChange={(e) => setEditDescricao(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Valor (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="input"
+                    value={editValor}
+                    onChange={(e) => setEditValor(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Tipo</label>
+                  <select
+                    className="input"
+                    value={editTipo}
+                    onChange={(e) => setEditTipo(e.target.value as any)}
+                  >
+                    <option value="despesa_variavel">Despesa Variável</option>
+                    <option value="despesa_fixa">Despesa Fixa</option>
+                    <option value="assinatura">Assinatura</option>
+                    <option value="receita">Receita</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Data de Vencimento</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={editDataVencimento}
+                    onChange={(e) => setEditDataVencimento(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Status do Pagamento</label>
+                  <select
+                    className="input"
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as any)}
+                  >
+                    <option value="pago">Pago</option>
+                    <option value="pendente">Pendente</option>
+                    <option value="atrasado">Atrasado</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setTransacaoEditando(null)}
+                  className="btn btn-secondary"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={salvandoEdicao}
+                >
+                  {salvandoEdicao ? 'Salvando...' : 'Salvar Alterações'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Modal de Importação de Contracheque */}
-      {modalAberto && (
+      {modalContrachequeAberto && (
         <div
           style={{
             position: 'fixed',
@@ -288,14 +448,13 @@ export default function FinancasPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setModalAberto(false)}
+                onClick={() => setModalContrachequeAberto(false)}
                 style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
               >
                 ✕
               </button>
             </div>
 
-            {/* Seleção do Arquivo */}
             <div style={{ marginBottom: '20px' }}>
               <label className="form-label">Selecione o arquivo do contracheque (PDF, PNG ou JPEG):</label>
               <input
@@ -323,7 +482,6 @@ export default function FinancasPage() {
               </button>
             )}
 
-            {/* Resultado da Análise */}
             {dadosContracheque && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
@@ -352,7 +510,6 @@ export default function FinancasPage() {
                   </div>
                 </div>
 
-                {/* Destaque do Líquido */}
                 <div
                   style={{
                     padding: '16px',
@@ -377,7 +534,6 @@ export default function FinancasPage() {
                   </div>
                 </div>
 
-                {/* Rubricas Discriminadas */}
                 {dadosContracheque.itens && dadosContracheque.itens.length > 0 && (
                   <div>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '8px' }}>Rubricas Identificadas:</div>
@@ -505,7 +661,7 @@ export default function FinancasPage() {
         </form>
       </div>
 
-      {/* Lista de Transações */}
+      {/* Lista de Transações com Edição e Exclusão */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Transações e Contas</h2>
@@ -526,6 +682,7 @@ export default function FinancasPage() {
                   <th>Vencimento</th>
                   <th>Valor</th>
                   <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -553,6 +710,28 @@ export default function FinancasPage() {
                       >
                         {t.status.toUpperCase()}
                       </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          onClick={() => iniciarEdicao(t)}
+                          className="btn btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+                          title="Editar lançamento"
+                        >
+                          ✏️ Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => excluirTransacao(t.id)}
+                          className="btn btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '0.8rem', color: 'var(--cor-perigo)' }}
+                          title="Excluir lançamento"
+                        >
+                          🗑️ Excluir
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
