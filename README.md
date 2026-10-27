@@ -16,7 +16,7 @@ Aplicação Web moderna construída em **Next.js (App Router)** e **Vanilla CSS*
    ```
 2. Adicione a URL do seu servidor e a chave anônima (anon key):
    ```env
-   NEXT_PUBLIC_SUPABASE_URL=https://supabase.martel.page/
+   NEXT_PUBLIC_SUPABASE_URL=https://api-supabase.martel.page
    NEXT_PUBLIC_SUPABASE_ANON_KEY=sua-anon-key
    ```
 3. No seu Supabase remoto, execute o script SQL contido em `../familia_os_backend/schema_remoto.sql` no **SQL Editor** para criar o schema `familialm` com todas as tabelas e permissões necessárias.
