@@ -1,9 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
-import styles from '@/components/layout/layout.module.css'
-import { Sidebar } from '@/components/layout/Sidebar'
-import { Header } from '@/components/layout/Header'
-import { ChatFlutuante } from '@/components/chat/ChatFlutuante'
+import { LayoutShell } from '@/components/layout/LayoutShell'
 
 export const metadata: Metadata = {
   title: 'Familia OS - Gestão Familiar Inteligente',
@@ -18,14 +15,7 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body>
-        <div className={styles.container}>
-          <Sidebar />
-          <div className={styles.mainArea}>
-            <Header />
-            <main className={styles.conteudo}>{children}</main>
-          </div>
-          <ChatFlutuante />
-        </div>
+        <LayoutShell>{children}</LayoutShell>
       </body>
     </html>
   )
