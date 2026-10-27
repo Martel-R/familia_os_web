@@ -36,3 +36,12 @@ npm run build
 # Iniciar servidor em modo de produção
 npm start
 ```
+
+## 🐳 Execução via Docker
+
+A imagem é gerada e publicada automaticamente no Docker Hub pelo pipeline de CI/CD:
+
+```bash
+docker pull <usuario>/familia-os-web:latest
+docker run -d -p 3000:3000 --name familia-os-web <usuario>/familia-os-web:latest
+```
