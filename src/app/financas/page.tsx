@@ -17,6 +17,7 @@ interface Cofrinho {
   meta_valor: number
   saldo_atual: number
   icone?: string
+  data_limite?: string
 }
 
 interface Transacao {
@@ -83,6 +84,16 @@ export default function FinancasPage() {
   const [novaContaInstituicao, setNovaContaInstituicao] = useState('')
   const [novaContaSaldo, setNovaContaSaldo] = useState('0')
   const [salvandoConta, setSalvandoConta] = useState(false)
+
+  // Modal de Criação / Edição de Cofrinho
+  const [modalCofrinhoCriarAberto, setModalCofrinhoCriarAberto] = useState(false)
+  const [cofrinhoEditando, setCofrinhoEditando] = useState<Cofrinho | null>(null)
+  const [nomeCofrinho, setNomeCofrinho] = useState('')
+  const [metaCofrinho, setMetaCofrinho] = useState('')
+  const [saldoInicialCofrinho, setSaldoInicialCofrinho] = useState('0')
+  const [iconeCofrinho, setIconeCofrinho] = useState('🐷')
+  const [dataLimiteCofrinho, setDataLimiteCofrinho] = useState('')
+  const [salvandoCofrinho, setSalvandoCofrinho] = useState(false)
 
   // Modal de Operação em Cofrinho (Aporte / Resgate)
   const [cofrinhoOperacao, setCofrinhoOperacao] = useState<{ cofre: Cofrinho; tipo: 'deposito' | 'resgate' } | null>(null)
@@ -193,6 +204,91 @@ export default function FinancasPage() {
       }
     } finally {
       setSalvandoConta(false)
+    }
+  }
+
+  // Criar ou Editar Cofrinho
+  const iniciarCriacaoCofrinho = () => {
+    setCofrinhoEditando(null)
+    setNomeCofrinho('')
+    setMetaCofrinho('')
+    setSaldoInicialCofrinho('0')
+    setIconeCofrinho('🐷')
+    setDataLimiteCofrinho('')
+    setModalCofrinhoCriarAberto(true)
+  }
+
+  const iniciarEdicaoCofrinho = (c: Cofrinho) => {
+    setCofrinhoEditando(c)
+    setNomeCofrinho(c.nome)
+    setMetaCofrinho(String(c.meta_valor))
+    setSaldoInicialCofrinho(String(c.saldo_atual || 0))
+    setIconeCofrinho(c.icone || '🐷')
+    setDataLimiteCofrinho(c.data_limite || '')
+    setModalCofrinhoCriarAberto(true)
+  }
+
+  const handleSalvarCofrinho = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!nomeCofrinho.trim() || !metaCofrinho || salvandoCofrinho) return
+
+    setSalvandoCofrinho(true)
+    try {
+      const meta = parseFloat(metaCofrinho)
+
+      if (cofrinhoEditando) {
+        // Atualizar cofrinho existente
+        const { error } = await supabase
+          .from('cofrinhos')
+          .update({
+            nome: nomeCofrinho,
+            meta_valor: meta,
+            icone: iconeCofrinho || '🐷',
+            data_limite: dataLimiteCofrinho || null,
+          })
+          .eq('id', cofrinhoEditando.id)
+
+        if (error) throw error
+      } else {
+        // Criar novo cofrinho
+        const { error } = await supabase.from('cofrinhos').insert([
+          {
+            nome: nomeCofrinho,
+            meta_valor: meta,
+            saldo_atual: parseFloat(saldoInicialCofrinho) || 0,
+            icone: iconeCofrinho || '🐷',
+            data_limite: dataLimiteCofrinho || null,
+          },
+        ])
+
+        if (error) throw error
+      }
+
+      await carregarDados()
+      setModalCofrinhoCriarAberto(false)
+      alert(`Cofrinho ${cofrinhoEditando ? 'atualizado' : 'criado'} com sucesso!`)
+    } catch (err: any) {
+      alert('Erro ao salvar cofrinho: ' + err.message)
+    } finally {
+      setSalvandoCofrinho(false)
+    }
+  }
+
+  const excluirCofrinho = async (id: string, nome: string) => {
+    if (!confirm(`Deseja realmente excluir o cofrinho "${nome}"? Todo o histórico de aportes e metas deste cofrinho será removido.`)) {
+      return
+    }
+
+    try {
+      const { error } = await supabase.from('cofrinhos').delete().eq('id', id)
+      if (error) {
+        alert('Erro ao excluir cofrinho: ' + error.message)
+      } else {
+        setCofrinhos(cofrinhos.filter((c) => c.id !== id))
+        alert('Cofrinho excluído com sucesso!')
+      }
+    } catch (err: any) {
+      alert('Erro ao excluir cofrinho: ' + err.message)
     }
   }
 
@@ -330,7 +426,7 @@ export default function FinancasPage() {
     }
   }
 
-  // Edição e Exclusão
+  // Edição e Exclusão de Transação
   const iniciarEdicao = (t: Transacao) => {
     setTransacaoEditando(t)
     setEditDescricao(t.descricao)
@@ -492,7 +588,6 @@ export default function FinancasPage() {
 
       const resultado: DocumentoFinanceiroExtraido = await response.json()
       setDadosDoc(resultado)
-      // Seleciona todas as transações por padrão
       setTransacoesSelecionadas(resultado.transacoes.map((_, idx) => idx))
     } catch (err: any) {
       alert('Erro ao analisar documento com IA: ' + err.message)
@@ -514,7 +609,6 @@ export default function FinancasPage() {
 
     setSalvandoDoc(true)
     try {
-      // 1. Upload do documento para o Supabase Storage
       const extensao = arquivoDoc.name.split('.').pop() || 'pdf'
       const pasta = dadosDoc.tipo_documento === 'fatura_cartao' ? 'faturas' : 'extratos'
       const nomeArquivo = `${pasta}/${Date.now()}_${dadosDoc.tipo_documento}.${extensao}`
@@ -523,7 +617,6 @@ export default function FinancasPage() {
         .from('familia-os-documentos')
         .upload(nomeArquivo, arquivoDoc)
 
-      // 2. Filtrar apenas as transações marcadas pelo usuário
       const transacoesParaInserir = dadosDoc.transacoes
         .filter((_, idx) => transacoesSelecionadas.includes(idx))
         .map((t) => {
@@ -551,7 +644,6 @@ export default function FinancasPage() {
 
       if (erroInsert) throw erroInsert
 
-      // 3. Atualizar saldo da conta caso seja extrato de conta corrente já pago
       if (contaDocId && dadosDoc.tipo_documento === 'extrato_bancario') {
         const delta = transacoesParaInserir.reduce((acc, t) => {
           return t.tipo === 'receita' ? acc + t.valor : acc - t.valor
@@ -637,51 +729,202 @@ export default function FinancasPage() {
         )}
       </div>
 
-      {/* Seção 2: Cofrinhos / Metas (Férias & Reserva) com Aportes e Resgates */}
+      {/* Seção 2: Cofrinhos / Metas da Família (com Criar, Editar, Excluir, Aportar e Resgatar) */}
       <div style={{ marginBottom: '32px' }}>
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '16px' }}>Cofrinhos & Metas da Família</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
-          {cofrinhos.map((cofre) => {
-            const porcentagem = Math.min(Math.round((cofre.saldo_atual / cofre.meta_valor) * 100), 100)
-            return (
-              <div key={cofre.id} className="card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ fontWeight: 600, fontSize: '1rem' }}>{cofre.nome}</span>
-                  <span className="badge badge-primary">{porcentagem}%</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+          <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Cofrinhos & Metas da Família</h2>
+          <button
+            type="button"
+            onClick={iniciarCriacaoCofrinho}
+            className="btn btn-secondary"
+            style={{ padding: '6px 14px', fontSize: '0.825rem' }}
+          >
+            🐷 + Novo Cofrinho
+          </button>
+        </div>
+
+        {cofrinhos.length === 0 && !carregando ? (
+          <div className="card" style={{ padding: '32px', textAlign: 'center', color: 'var(--texto-secundario)' }}>
+            Nenhum cofrinho cadastrado ainda. Clique em "🐷 + Novo Cofrinho" para criar metas como Férias, Reserva de Emergência, etc.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+            {cofrinhos.map((cofre) => {
+              const porcentagem = Math.min(Math.round((cofre.saldo_atual / cofre.meta_valor) * 100), 100)
+              return (
+                <div key={cofre.id} className="card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontWeight: 600, fontSize: '1rem' }}>{cofre.nome}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="badge badge-primary">{porcentagem}%</span>
+                      <button
+                        type="button"
+                        onClick={() => iniciarEdicaoCofrinho(cofre)}
+                        className="btn btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                        title="Editar cofrinho"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => excluirCofrinho(cofre.id, cofre.nome)}
+                        className="btn btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '0.75rem', color: 'var(--cor-perigo)' }}
+                        title="Excluir cofrinho"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>
+                    R$ {Number(cofre.saldo_atual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}{' '}
+                    <span style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', fontWeight: 400 }}>
+                      de R$ {Number(cofre.meta_valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  {cofre.data_limite && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '4px' }}>
+                      Meta para: {cofre.data_limite}
+                    </div>
+                  )}
+
+                  <div style={{ width: '100%', height: '8px', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--raio-full)', marginTop: '12px', overflow: 'hidden' }}>
+                    <div style={{ width: `${porcentagem}%`, height: '100%', backgroundColor: 'var(--cor-primaria)', borderRadius: 'var(--raio-full)' }} />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setCofrinhoOperacao({ cofre, tipo: 'deposito' })}
+                      className="btn btn-primary"
+                      style={{ flex: 1, padding: '6px 12px', fontSize: '0.8rem' }}
+                    >
+                      + Guardar Dinheiro
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCofrinhoOperacao({ cofre, tipo: 'resgate' })}
+                      className="btn btn-secondary"
+                      style={{ flex: 1, padding: '6px 12px', fontSize: '0.8rem' }}
+                    >
+                      - Resgatar
+                    </button>
+                  </div>
                 </div>
-                <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>
-                  R$ {Number(cofre.saldo_atual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}{' '}
-                  <span style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', fontWeight: 400 }}>
-                    de R$ {Number(cofre.meta_valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div style={{ width: '100%', height: '8px', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--raio-full)', marginTop: '12px', overflow: 'hidden' }}>
-                  <div style={{ width: `${porcentagem}%`, height: '100%', backgroundColor: 'var(--cor-primaria)', borderRadius: 'var(--raio-full)' }} />
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Modal de Criação / Edição de Cofrinho */}
+      {modalCofrinhoCriarAberto && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '16px',
+          }}
+        >
+          <div className="card" style={{ width: '100%', maxWidth: '480px', backgroundColor: 'var(--bg-card)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                {cofrinhoEditando ? '✏️ Editar Cofrinho' : '🐷 Novo Cofrinho / Meta'}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setModalCofrinhoCriarAberto(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSalvarCofrinho} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Nome do Cofrinho</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Ex: 🏖️ Férias de Verão, 🚗 Carro Novo, 🛡️ Reserva"
+                  value={nomeCofrinho}
+                  onChange={(e) => setNomeCofrinho(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Meta de Valor (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    className="input"
+                    placeholder="10000.00"
+                    value={metaCofrinho}
+                    onChange={(e) => setMetaCofrinho(e.target.value)}
+                    required
+                  />
                 </div>
 
-                <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setCofrinhoOperacao({ cofre, tipo: 'deposito' })}
-                    className="btn btn-primary"
-                    style={{ flex: 1, padding: '6px 12px', fontSize: '0.8rem' }}
-                  >
-                    + Guardar Dinheiro
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCofrinhoOperacao({ cofre, tipo: 'resgate' })}
-                    className="btn btn-secondary"
-                    style={{ flex: 1, padding: '6px 12px', fontSize: '0.8rem' }}
-                  >
-                    - Resgatar
-                  </button>
-                </div>
+                {!cofrinhoEditando && (
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Saldo Inicial (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="input"
+                      placeholder="0.00"
+                      value={saldoInicialCofrinho}
+                      onChange={(e) => setSaldoInicialCofrinho(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                {cofrinhoEditando && (
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Ícone / Emoji</label>
+                    <input
+                      type="text"
+                      className="input"
+                      value={iconeCofrinho}
+                      onChange={(e) => setIconeCofrinho(e.target.value)}
+                    />
+                  </div>
+                )}
               </div>
-            )
-          })}
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Data Limite / Prazo (Opcional)</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={dataLimiteCofrinho}
+                  onChange={(e) => setDataLimiteCofrinho(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
+                <button type="button" onClick={() => setModalCofrinhoCriarAberto(false)} className="btn btn-secondary">
+                  Cancelar
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={salvandoCofrinho}>
+                  {salvandoCofrinho ? 'Salvando...' : cofrinhoEditando ? 'Salvar Alterações' : 'Criar Cofrinho'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Modal de Operação em Cofrinho (Aporte / Resgate) */}
       {cofrinhoOperacao && (
