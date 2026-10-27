@@ -3,6 +3,7 @@ import './globals.css'
 import styles from '@/components/layout/layout.module.css'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
+import { ChatFlutuante } from '@/components/chat/ChatFlutuante'
 
 export const metadata: Metadata = {
   title: 'Familia OS - Gestão Familiar Inteligente',
@@ -23,6 +24,7 @@ export default function RootLayout({
             <Header />
             <main className={styles.conteudo}>{children}</main>
           </div>
+          <ChatFlutuante />
         </div>
       </body>
     </html>
