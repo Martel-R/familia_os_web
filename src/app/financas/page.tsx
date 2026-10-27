@@ -131,8 +131,7 @@ export default function FinancasPage() {
       const formData = new FormData()
       formData.append('file', arquivoContracheque)
 
-      const aiUrl = process.env.NEXT_PUBLIC_AI_API_URL || 'http://localhost:8000'
-      const response = await fetch(`${aiUrl}/api/ocr/payslip`, {
+      const response = await fetch('/api/ocr/payslip', {
         method: 'POST',
         body: formData,
       })
