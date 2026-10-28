@@ -68,6 +68,7 @@ export default function RotinasPage() {
 
   // Filtro de tarefas por membro
   const [membroFiltroId, setMembroFiltroId] = useState<string>('todos')
+  const [usuarioLogadoId, setUsuarioLogadoId] = useState<string>('')
 
   // Formulário de nova rotina
   const [modalTarefaAberto, setModalTarefaAberto] = useState(false)
@@ -105,14 +106,26 @@ export default function RotinasPage() {
         .select('*')
         .order('nome', { ascending: true })
 
+      let logadoId = ''
       if (usuariosData) {
         setUsuarios(usuariosData)
-        if (usuariosData.length > 0 && !responsavelId) {
-          const primeiroAtivo = usuariosData.find((u) => u.ativo !== false)
-          if (primeiroAtivo) {
-            setResponsavelId(primeiroAtivo.id)
-            setUsuarioResgatandoId(primeiroAtivo.id)
+
+        // Identificar o usuário logado atualmente no Supabase Auth
+        const { data: authData } = await supabase.auth.getUser()
+        if (authData?.user) {
+          const achou = usuariosData.find(
+            (u) => u.auth_user_id === authData.user.id || u.id === authData.user.id || u.email === authData.user.email
+          )
+          if (achou) {
+            logadoId = achou.id
+            setUsuarioLogadoId(achou.id)
           }
+        }
+
+        const idPadrao = logadoId || usuariosData.find((u) => u.ativo !== false)?.id || ''
+        if (idPadrao && !responsavelId) {
+          setResponsavelId(idPadrao)
+          setUsuarioResgatandoId(idPadrao)
         }
       }
 
@@ -173,39 +186,59 @@ export default function RotinasPage() {
     const novoStatus = !tarefa.esta_concluida
     const moedasDelta = tarefa.moedas_recompensa || 0
 
+    // Identificar a quem creditar os pontos:
+    // Se a tarefa já tem responsável, credita ele.
+    // Se a tarefa não tem responsável (órfã), atribui e credita o usuário logado ou o primeiro membro ativo.
+    const idAlvo = tarefa.responsavel_id || (membroFiltroId !== 'todos' ? membroFiltroId : usuarioLogadoId) || membrosAtivos[0]?.id
+
     // Atualização otimista na tela
-    setTarefas(tarefas.map((t) => (t.id === tarefa.id ? { ...t, esta_concluida: novoStatus } : t)))
+    setTarefas((prev) =>
+      prev.map((t) =>
+        t.id === tarefa.id
+          ? { ...t, esta_concluida: novoStatus, responsavel_id: t.responsavel_id || idAlvo }
+          : t
+      )
+    )
 
     try {
       // 1. Atualizar a tarefa no banco
+      const payloadTarefa: any = {
+        esta_concluida: novoStatus,
+        atualizado_em: new Date().toISOString(),
+      }
+      if (!tarefa.responsavel_id && idAlvo) {
+        payloadTarefa.responsavel_id = idAlvo
+      }
+
       const { error: errTarefa } = await supabase
         .from('tarefas_rotinas')
-        .update({
-          esta_concluida: novoStatus,
-          atualizado_em: new Date().toISOString(),
-        })
+        .update(payloadTarefa)
         .eq('id', tarefa.id)
 
       if (errTarefa) throw errTarefa
 
-      // 2. Se a tarefa tiver responsável e moedas associadas, creditar ou debitar do saldo
-      if (tarefa.responsavel_id && moedasDelta > 0) {
-        const responsavel = usuarios.find((u) => u.id === tarefa.responsavel_id)
+      // 2. Creditar ou debitar moedas no saldo do responsável
+      if (idAlvo && moedasDelta > 0) {
+        const responsavel = usuarios.find((u) => u.id === idAlvo)
         if (responsavel) {
+          const saldoAtual = Number(responsavel.saldo_moedas) || 0
           const novoSaldo = novoStatus
-            ? (responsavel.saldo_moedas || 0) + moedasDelta
-            : Math.max(0, (responsavel.saldo_moedas || 0) - moedasDelta)
+            ? saldoAtual + moedasDelta
+            : Math.max(0, saldoAtual - moedasDelta)
 
-          // Atualizar saldo do usuário no Supabase
-          await supabase
+          const { error: errSaldo } = await supabase
             .from('usuarios')
             .update({ saldo_moedas: novoSaldo })
             .eq('id', responsavel.id)
 
-          // Atualizar estado local dos usuários
-          setUsuarios(
-            usuarios.map((u) => (u.id === responsavel.id ? { ...u, saldo_moedas: novoSaldo } : u))
-          )
+          if (errSaldo) {
+            console.error('Erro ao atualizar saldo no Supabase:', errSaldo)
+          } else {
+            // Atualizar estado local dos usuários
+            setUsuarios((prev) =>
+              prev.map((u) => (u.id === responsavel.id ? { ...u, saldo_moedas: novoSaldo } : u))
+            )
+          }
         }
       }
     } catch (err: any) {
@@ -230,6 +263,8 @@ export default function RotinasPage() {
     setDiasSelecionados([])
     setDiaMes(1)
     setMoedas('10')
+    const padrao = membroFiltroId !== 'todos' ? membroFiltroId : (usuarioLogadoId || membrosAtivos[0]?.id || '')
+    setResponsavelId(padrao)
     setModalTarefaAberto(true)
   }
 
