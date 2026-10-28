@@ -23,6 +23,7 @@ interface Tarefa {
   dia_mes?: number
   moedas_recompensa: number
   esta_concluida: boolean
+  ultima_conclusao_data?: string
   atualizado_em?: string
 }
 
@@ -57,6 +58,46 @@ const DIAS_DA_SEMANA = [
   { id: 'Sáb', label: 'Sábado' },
   { id: 'Dom', label: 'Domingo' },
 ]
+
+// Utilitário para obter data e dia da semana no fuso de Belém (UTC-3)
+const getHojeBelem = () => {
+  const agora = new Date()
+
+  // Formato YYYY-MM-DD
+  const formatadorData = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Belem',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  const dataHojeStr = formatadorData.format(agora)
+
+  // Dia da semana curto
+  const formatadorSemana = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Belem',
+    weekday: 'short',
+  })
+  const semanaBruta = formatadorSemana.format(agora).toLowerCase().replace('.', '')
+
+  const mapaSemana: { [k: string]: string } = {
+    seg: 'Seg',
+    ter: 'Ter',
+    qua: 'Qua',
+    qui: 'Qui',
+    sex: 'Sex',
+    sáb: 'Sáb',
+    sab: 'Sáb',
+    dom: 'Dom',
+  }
+
+  const diaMesNum = parseInt(dataHojeStr.split('-')[2], 10)
+
+  return {
+    dataHojeStr,
+    diaSemanaId: mapaSemana[semanaBruta] || 'Qua',
+    diaMesNum,
+  }
+}
 
 export default function RotinasPage() {
   const [abaAtiva, setAbaAtiva] = useState<'rotinas' | 'loja' | 'historico'>('rotinas')
@@ -96,9 +137,18 @@ export default function RotinasPage() {
   const [usuarioResgatandoId, setUsuarioResgatandoId] = useState('')
   const [processandoResgate, setProcessandoResgate] = useState(false)
 
+  // Estado da data atual (calculada no cliente para compatibilidade com Next.js prerender)
+  const [hoje, setHoje] = useState<{ dataHojeStr: string; diaSemanaId: string; diaMesNum: number }>({
+    dataHojeStr: '',
+    diaSemanaId: 'Qua',
+    diaMesNum: 1,
+  })
+
   const carregarDados = async () => {
     try {
       setCarregando(true)
+      const dataHojeInfo = getHojeBelem()
+      setHoje(dataHojeInfo)
 
       // 1. Carregar Membros da Família
       const { data: usuariosData } = await supabase
@@ -110,7 +160,6 @@ export default function RotinasPage() {
       if (usuariosData) {
         setUsuarios(usuariosData)
 
-        // Identificar o usuário logado atualmente no Supabase Auth
         const { data: authData } = await supabase.auth.getUser()
         if (authData?.user) {
           const achou = usuariosData.find(
@@ -129,7 +178,7 @@ export default function RotinasPage() {
         }
       }
 
-      // 2. Carregar Rotinas / Tarefas
+      // 2. Carregar Rotinas / Tarefas e aplicar Auto-Reset de ciclos anteriores
       const { data: tarefasData } = await supabase
         .from('tarefas_rotinas')
         .select('*')
@@ -137,7 +186,27 @@ export default function RotinasPage() {
         .order('atualizado_em', { ascending: false })
 
       if (tarefasData) {
-        setTarefas(tarefasData)
+        // Reset diário: tarefas recorrentes concluídas em dia anterior voltam a ficar pendentes para o novo ciclo!
+        const tarefasAjustadas: Tarefa[] = tarefasData.map((t) => {
+          if (t.recorrencia !== 'unica' && t.esta_concluida && t.ultima_conclusao_data !== dataHojeInfo.dataHojeStr) {
+            return { ...t, esta_concluida: false }
+          }
+          return t
+        })
+
+        setTarefas(tarefasAjustadas)
+
+        // Sincronizar reset no banco caso haja tarefas de dias anteriores
+        const tarefasParaResetarNoBanco = tarefasData.filter(
+          (t) => t.recorrencia !== 'unica' && t.esta_concluida && t.ultima_conclusao_data !== dataHojeInfo.dataHojeStr
+        )
+        if (tarefasParaResetarNoBanco.length > 0) {
+          const idsParaReset = tarefasParaResetarNoBanco.map((t) => t.id)
+          await supabase
+            .from('tarefas_rotinas')
+            .update({ esta_concluida: false })
+            .in('id', idsParaReset)
+        }
       }
 
       // 3. Carregar Privilégios da Loja
@@ -181,29 +250,118 @@ export default function RotinasPage() {
     carregarDados()
   }, [])
 
-  // Checkbox de Conclusão de Tarefa com Bonificação Automática de Moedas
+  // Validador de Disponibilidade, Responsabilidade e Ciclo
+  const verificarDisponibilidade = (tarefa: Tarefa) => {
+    const concluidaHoje =
+      tarefa.esta_concluida &&
+      (tarefa.recorrencia === 'unica' || tarefa.ultima_conclusao_data === hoje.dataHojeStr)
+
+    const responsavel = usuarios.find((u) => u.id === tarefa.responsavel_id)
+
+    // Trava de Responsabilidade: Se a tarefa possui um responsável definido,
+    // somente o próprio responsável pode marcá-la como concluída.
+    const ehMinhaResponsabilidade =
+      !tarefa.responsavel_id || (usuarioLogadoId ? tarefa.responsavel_id === usuarioLogadoId : true)
+
+    let disponivelHoje = false
+    let mensagemTempo = ''
+
+    // 1. DIÁRIA: Disponível todos os dias
+    if (tarefa.recorrencia === 'diaria') {
+      disponivelHoje = true
+      mensagemTempo = concluidaHoje ? 'Concluída hoje' : 'Disponível hoje (Diária)'
+    }
+    // 2. SEMANAL: Disponível apenas nos dias da semana selecionados
+    else if (tarefa.recorrencia === 'semanal') {
+      const diasArray = (tarefa.dias_semana || '').split(',').map((d) => d.trim())
+      const ehDiaValido = diasArray.includes(hoje.diaSemanaId)
+
+      if (ehDiaValido) {
+        disponivelHoje = true
+        mensagemTempo = concluidaHoje ? 'Concluída hoje' : `Disponível hoje (${hoje.diaSemanaId})`
+      } else {
+        disponivelHoje = false
+        mensagemTempo = `Disponível em: ${tarefa.dias_semana || 'dias agendados'}`
+      }
+    }
+    // 3. MENSAL: Disponível apenas no dia fixo do mês
+    else if (tarefa.recorrencia === 'mensal') {
+      const ehDiaDoMes = tarefa.dia_mes === hoje.diaMesNum
+
+      if (ehDiaDoMes) {
+        disponivelHoje = true
+        mensagemTempo = concluidaHoje ? 'Concluída hoje' : `Disponível hoje (Dia ${hoje.diaMesNum})`
+      } else {
+        disponivelHoje = false
+        mensagemTempo = `Disponível todo dia ${tarefa.dia_mes}`
+      }
+    }
+    // 4. ÚNICA: Disponível até ser feita
+    else {
+      disponivelHoje = true
+      mensagemTempo = tarefa.esta_concluida ? 'Concluída' : 'Disponível'
+    }
+
+    const podeConcluir = disponivelHoje && ehMinhaResponsabilidade
+
+    let mensagemFinal = mensagemTempo
+    if (!ehMinhaResponsabilidade) {
+      mensagemFinal = `Atribuída a ${responsavel?.nome || 'outro membro'}`
+    }
+
+    return {
+      disponivelHoje,
+      concluidaHoje,
+      ehMinhaResponsabilidade,
+      podeConcluir,
+      mensagemStatus: mensagemFinal,
+      nomeResponsavel: responsavel?.nome,
+    }
+  }
+
+  // Checkbox de Conclusão de Tarefa com Trava de Dias e Responsabilidade
   const toggleTarefa = async (tarefa: Tarefa) => {
-    const novoStatus = !tarefa.esta_concluida
+    const disp = verificarDisponibilidade(tarefa)
+
+    // Se a tarefa não for de responsabilidade do usuário conectado, bloqueia
+    if (!disp.ehMinhaResponsabilidade) {
+      alert(`⚠️ Você não pode concluir esta tarefa pois ela é de responsabilidade de ${disp.nomeResponsavel || 'outro membro'}.`)
+      return
+    }
+
+    // Se hoje não for o dia permitido para a rotina, bloqueia a conclusão
+    if (!disp.disponivelHoje) {
+      alert(`⚠️ Esta rotina não pode ser concluída hoje.\n${disp.mensagemStatus}.`)
+      return
+    }
+
+    const novoStatus = !disp.concluidaHoje
     const moedasDelta = tarefa.moedas_recompensa || 0
 
-    // Identificar a quem creditar os pontos:
-    // Se a tarefa já tem responsável, credita ele.
-    // Se a tarefa não tem responsável (órfã), atribui e credita o usuário logado ou o primeiro membro ativo.
-    const idAlvo = tarefa.responsavel_id || (membroFiltroId !== 'todos' ? membroFiltroId : usuarioLogadoId) || membrosAtivos[0]?.id
+    const idAlvo =
+      tarefa.responsavel_id ||
+      (membroFiltroId !== 'todos' ? membroFiltroId : usuarioLogadoId) ||
+      membrosAtivos[0]?.id
 
-    // Atualização otimista na tela
+    // Atualização otimista local
     setTarefas((prev) =>
       prev.map((t) =>
         t.id === tarefa.id
-          ? { ...t, esta_concluida: novoStatus, responsavel_id: t.responsavel_id || idAlvo }
+          ? {
+              ...t,
+              esta_concluida: novoStatus,
+              ultima_conclusao_data: novoStatus ? hoje.dataHojeStr : undefined,
+              responsavel_id: t.responsavel_id || idAlvo,
+            }
           : t
       )
     )
 
     try {
-      // 1. Atualizar a tarefa no banco
+      // 1. Atualizar a tarefa no banco com data da conclusão
       const payloadTarefa: any = {
         esta_concluida: novoStatus,
+        ultima_conclusao_data: novoStatus ? hoje.dataHojeStr : null,
         atualizado_em: new Date().toISOString(),
       }
       if (!tarefa.responsavel_id && idAlvo) {
@@ -234,7 +392,6 @@ export default function RotinasPage() {
           if (errSaldo) {
             console.error('Erro ao atualizar saldo no Supabase:', errSaldo)
           } else {
-            // Atualizar estado local dos usuários
             setUsuarios((prev) =>
               prev.map((u) => (u.id === responsavel.id ? { ...u, saldo_moedas: novoSaldo } : u))
             )
@@ -261,7 +418,7 @@ export default function RotinasPage() {
     setTitulo('')
     setRecorrencia('diaria')
     setDiasSelecionados([])
-    setDiaMes(1)
+    setDiaMes(hoje.diaMesNum)
     setMoedas('10')
     const padrao = membroFiltroId !== 'todos' ? membroFiltroId : (usuarioLogadoId || membrosAtivos[0]?.id || '')
     setResponsavelId(padrao)
@@ -274,7 +431,7 @@ export default function RotinasPage() {
     setResponsavelId(t.responsavel_id || '')
     setRecorrencia(t.recorrencia)
     setDiasSelecionados(t.dias_semana ? t.dias_semana.split(', ') : [])
-    setDiaMes(t.dia_mes || 1)
+    setDiaMes(t.dia_mes || hoje.diaMesNum)
     setMoedas(String(t.moedas_recompensa || 0))
     setModalTarefaAberto(true)
   }
@@ -295,7 +452,7 @@ export default function RotinasPage() {
       }
 
       if (recorrencia === 'semanal') {
-        payload.dias_semana = diasSelecionados.join(', ') || 'Segunda a Sexta'
+        payload.dias_semana = diasSelecionados.join(', ') || 'Seg, Qua, Sex'
         payload.dia_mes = null
       } else if (recorrencia === 'mensal') {
         payload.dia_mes = diaMes
@@ -426,7 +583,6 @@ export default function RotinasPage() {
     try {
       const novoSaldo = (membro.saldo_moedas || 0) - privilegioParaResgate.custo_moedas
 
-      // 1. Debitar saldo do membro
       const { error: errSaldo } = await supabase
         .from('usuarios')
         .update({ saldo_moedas: novoSaldo })
@@ -434,7 +590,6 @@ export default function RotinasPage() {
 
       if (errSaldo) throw errSaldo
 
-      // 2. Registrar resgate
       const { error: errResgate } = await supabase.from('resgates_privilegios').insert([
         {
           privilegio_id: privilegioParaResgate.id,
@@ -472,7 +627,7 @@ export default function RotinasPage() {
             Rotinas & Gamificação Infantil
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Hábitos diários, moedas por tarefas concluídas e loja de privilégios resgatáveis.
+            Hoje é <strong>{hoje.diaSemanaId}, dia {hoje.diaMesNum}</strong>. Tarefas diárias e agendadas zeram automaticamente a cada ciclo.
           </p>
         </div>
 
@@ -583,7 +738,7 @@ export default function RotinasPage() {
         </button>
       </div>
 
-      {/* ABA 1: QUADRO DE ROTINAS */}
+      {/* ABA 1: QUADRO DE ROTINAS COM TRAVAS TEMPORAIS */}
       {abaAtiva === 'rotinas' && (
         <div>
           {carregando ? (
@@ -598,6 +753,7 @@ export default function RotinasPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {tarefasFiltradas.map((tarefa) => {
                 const responsavel = usuarios.find((u) => u.id === tarefa.responsavel_id)
+                const disp = verificarDisponibilidade(tarefa)
 
                 return (
                   <div
@@ -608,19 +764,36 @@ export default function RotinasPage() {
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       padding: '16px 20px',
-                      backgroundColor: tarefa.esta_concluida ? 'var(--bg-hover)' : 'var(--bg-card)',
-                      opacity: tarefa.esta_concluida ? 0.75 : 1,
+                      backgroundColor: disp.concluidaHoje ? 'var(--bg-hover)' : 'var(--bg-card)',
+                      opacity: !disp.podeConcluir ? 0.6 : disp.concluidaHoje ? 0.85 : 1,
+                      borderLeft: disp.concluidaHoje
+                        ? '4px solid var(--cor-sucesso)'
+                        : !disp.ehMinhaResponsabilidade
+                        ? '4px solid var(--borda)'
+                        : disp.disponivelHoje
+                        ? '4px solid var(--cor-alerta)'
+                        : '4px solid var(--texto-secundario)',
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
                       <input
                         type="checkbox"
-                        checked={tarefa.esta_concluida}
+                        checked={disp.concluidaHoje}
+                        disabled={!disp.podeConcluir}
                         onChange={() => toggleTarefa(tarefa)}
+                        title={
+                          !disp.ehMinhaResponsabilidade
+                            ? `Bloqueada: Esta rotina é de responsabilidade de ${disp.nomeResponsavel || 'outro membro'}`
+                            : !disp.disponivelHoje
+                            ? `Bloqueada hoje: ${disp.mensagemStatus}`
+                            : disp.concluidaHoje
+                            ? 'Clique para desmarcar'
+                            : 'Clique para concluir e ganhar moedas'
+                        }
                         style={{
                           width: '22px',
                           height: '22px',
-                          cursor: 'pointer',
+                          cursor: disp.podeConcluir ? 'pointer' : 'not-allowed',
                           accentColor: 'var(--cor-sucesso)',
                         }}
                       />
@@ -630,8 +803,8 @@ export default function RotinasPage() {
                           style={{
                             fontWeight: 600,
                             fontSize: '1rem',
-                            textDecoration: tarefa.esta_concluida ? 'line-through' : 'none',
-                            color: tarefa.esta_concluida ? 'var(--texto-secundario)' : 'inherit',
+                            textDecoration: disp.concluidaHoje ? 'line-through' : 'none',
+                            color: disp.concluidaHoje ? 'var(--texto-secundario)' : 'inherit',
                           }}
                         >
                           {tarefa.titulo}
@@ -648,15 +821,37 @@ export default function RotinasPage() {
                             {tarefa.recorrencia.toUpperCase()}
                           </span>
 
+                          {/* Status de Disponibilidade Temporal e Responsabilidade */}
+                          <span
+                            className={`badge ${
+                              disp.concluidaHoje
+                                ? 'badge-success'
+                                : !disp.ehMinhaResponsabilidade
+                                ? 'badge-secondary'
+                                : disp.disponivelHoje
+                                ? 'badge-warning'
+                                : 'badge-secondary'
+                            }`}
+                            style={{ fontSize: '0.7rem' }}
+                          >
+                            {disp.concluidaHoje
+                              ? '✓ Feita hoje'
+                              : !disp.ehMinhaResponsabilidade
+                              ? `👤 Pertence a ${disp.nomeResponsavel || 'outro'}`
+                              : disp.disponivelHoje
+                              ? '⏳ Disponível hoje'
+                              : `🔒 ${disp.mensagemStatus}`}
+                          </span>
+
                           {tarefa.dias_semana && (
                             <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>
-                              📅 {tarefa.dias_semana}
+                              📅 Dias: {tarefa.dias_semana}
                             </span>
                           )}
 
                           {tarefa.dia_mes && (
                             <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>
-                              📅 Todo dia {tarefa.dia_mes}
+                              📅 Dia {tarefa.dia_mes} do mês
                             </span>
                           )}
                         </div>
@@ -905,9 +1100,9 @@ export default function RotinasPage() {
                   onChange={(e) => setRecorrencia(e.target.value as any)}
                 >
                   <option value="diaria">Diária (Todos os dias)</option>
-                  <option value="semanal">Semanal (Dias específicos)</option>
+                  <option value="semanal">Semanal (Dias específicos da semana)</option>
                   <option value="mensal">Mensal (Dia fixo do mês)</option>
-                  <option value="unica">Única</option>
+                  <option value="unica">Única (Não repete)</option>
                 </select>
               </div>
 
@@ -930,6 +1125,9 @@ export default function RotinasPage() {
                       )
                     })}
                   </div>
+                  <span style={{ fontSize: '0.725rem', color: 'var(--texto-secundario)', marginTop: '4px', display: 'block' }}>
+                    A tarefa só poderá ser concluída e pontuada nos dias selecionados acima.
+                  </span>
                 </div>
               )}
 
@@ -945,6 +1143,9 @@ export default function RotinasPage() {
                     onChange={(e) => setDiaMes(parseInt(e.target.value) || 1)}
                     required
                   />
+                  <span style={{ fontSize: '0.725rem', color: 'var(--texto-secundario)', marginTop: '4px', display: 'block' }}>
+                    A tarefa só será liberada para conclusão e pontuação exatamente no dia {diaMes} de cada mês.
+                  </span>
                 </div>
               )}
 
