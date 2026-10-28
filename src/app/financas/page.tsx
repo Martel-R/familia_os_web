@@ -20,6 +20,20 @@ interface Cofrinho {
   data_limite?: string
 }
 
+interface DespesaRecorrente {
+  id: string
+  nome: string
+  tipo: 'emprestimo' | 'financiamento' | 'despesa_fixa' | 'assinatura'
+  valor_parcela: number
+  dia_vencimento: number
+  total_parcelas?: number
+  parcelas_pagas?: number
+  saldo_devedor_total?: number
+  conta_padrao_id?: string
+  palavras_chave_extrato?: string
+  ativo: boolean
+}
+
 interface Transacao {
   id: string
   descricao: string
@@ -29,6 +43,7 @@ interface Transacao {
   status: 'pendente' | 'pago' | 'atrasado'
   conta_id?: string
   cofrinho_id?: string
+  recorrencia_id?: string
 }
 
 interface ItemContracheque {
@@ -53,6 +68,7 @@ interface TransacaoDocumento {
   categoria_sugerida?: string
   tipo: string
   valor: number
+  recorrencia_id?: string
 }
 
 interface DocumentoFinanceiroExtraido {
@@ -68,6 +84,7 @@ export default function FinancasPage() {
   const [transacoes, setTransacoes] = useState<Transacao[]>([])
   const [cofrinhos, setCofrinhos] = useState<Cofrinho[]>([])
   const [contas, setContas] = useState<ContaBancaria[]>([])
+  const [recorrentes, setRecorrentes] = useState<DespesaRecorrente[]>([])
   const [carregando, setCarregando] = useState(true)
   const [salvando, setSalvando] = useState(false)
 
@@ -94,6 +111,20 @@ export default function FinancasPage() {
   const [iconeCofrinho, setIconeCofrinho] = useState('🐷')
   const [dataLimiteCofrinho, setDataLimiteCofrinho] = useState('')
   const [salvandoCofrinho, setSalvandoCofrinho] = useState(false)
+
+  // Modal de Criação / Edição de Empréstimo ou Despesa Recorrente
+  const [modalRecorrenteAberto, setModalRecorrenteAberto] = useState(false)
+  const [recorrenteEditando, setRecorrenteEditando] = useState<DespesaRecorrente | null>(null)
+  const [nomeRec, setNomeRec] = useState('')
+  const [tipoRec, setTipoRec] = useState<'emprestimo' | 'financiamento' | 'despesa_fixa' | 'assinatura'>('emprestimo')
+  const [valorParcelaRec, setValorParcelaRec] = useState('')
+  const [diaVencimentoRec, setDiaVencimentoRec] = useState('10')
+  const [totalParcelasRec, setTotalParcelasRec] = useState('36')
+  const [parcelasPagasRec, setParcelasPagasRec] = useState('0')
+  const [saldoDevedorRec, setSaldoDevedorRec] = useState('')
+  const [contaPadraoRecId, setContaPadraoRecId] = useState('')
+  const [palavrasChaveRec, setPalavrasChaveRec] = useState('')
+  const [salvandoRecorrente, setSalvandoRecorrente] = useState(false)
 
   // Modal de Operação em Cofrinho (Aporte / Resgate)
   const [cofrinhoOperacao, setCofrinhoOperacao] = useState<{ cofre: Cofrinho; tipo: 'deposito' | 'resgate' } | null>(null)
@@ -144,6 +175,7 @@ export default function FinancasPage() {
           if (!contaAporteId) setContaAporteId(contasData[0].id)
           if (!contaContrachequeId) setContaContrachequeId(contasData[0].id)
           if (!contaDocId) setContaDocId(contasData[0].id)
+          if (!contaPadraoRecId) setContaPadraoRecId(contasData[0].id)
         }
       }
 
@@ -154,6 +186,15 @@ export default function FinancasPage() {
 
       if (cofrinhosData) {
         setCofrinhos(cofrinhosData)
+      }
+
+      const { data: recData } = await supabase
+        .from('despesas_recorrentes')
+        .select('*')
+        .order('nome', { ascending: true })
+
+      if (recData) {
+        setRecorrentes(recData)
       }
 
       const { data: transacoesData } = await supabase
@@ -237,7 +278,6 @@ export default function FinancasPage() {
       const meta = parseFloat(metaCofrinho)
 
       if (cofrinhoEditando) {
-        // Atualizar cofrinho existente
         const { error } = await supabase
           .from('cofrinhos')
           .update({
@@ -250,7 +290,6 @@ export default function FinancasPage() {
 
         if (error) throw error
       } else {
-        // Criar novo cofrinho
         const { error } = await supabase.from('cofrinhos').insert([
           {
             nome: nomeCofrinho,
@@ -289,6 +328,143 @@ export default function FinancasPage() {
       }
     } catch (err: any) {
       alert('Erro ao excluir cofrinho: ' + err.message)
+    }
+  }
+
+  // Criar ou Editar Empréstimo / Recorrência
+  const iniciarCriacaoRecorrente = () => {
+    setRecorrenteEditando(null)
+    setNomeRec('')
+    setTipoRec('emprestimo')
+    setValorParcelaRec('')
+    setDiaVencimentoRec('10')
+    setTotalParcelasRec('36')
+    setParcelasPagasRec('0')
+    setSaldoDevedorRec('')
+    setPalavrasChaveRec('')
+    setModalRecorrenteAberto(true)
+  }
+
+  const iniciarEdicaoRecorrente = (r: DespesaRecorrente) => {
+    setRecorrenteEditando(r)
+    setNomeRec(r.nome)
+    setTipoRec(r.tipo)
+    setValorParcelaRec(String(r.valor_parcela))
+    setDiaVencimentoRec(String(r.dia_vencimento))
+    setTotalParcelasRec(r.total_parcelas ? String(r.total_parcelas) : '')
+    setParcelasPagasRec(String(r.parcelas_pagas || 0))
+    setSaldoDevedorRec(r.saldo_devedor_total ? String(r.saldo_devedor_total) : '')
+    setContaPadraoRecId(r.conta_padrao_id || '')
+    setPalavrasChaveRec(r.palavras_chave_extrato || '')
+    setModalRecorrenteAberto(true)
+  }
+
+  const handleSalvarRecorrente = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!nomeRec.trim() || !valorParcelaRec || salvandoRecorrente) return
+
+    setSalvandoRecorrente(true)
+    try {
+      const payload: any = {
+        nome: nomeRec,
+        tipo: tipoRec,
+        valor_parcela: parseFloat(valorParcelaRec),
+        dia_vencimento: parseInt(diaVencimentoRec) || 10,
+        total_parcelas: totalParcelasRec ? parseInt(totalParcelasRec) : null,
+        parcelas_pagas: parseInt(parcelasPagasRec) || 0,
+        saldo_devedor_total: saldoDevedorRec ? parseFloat(saldoDevedorRec) : null,
+        conta_padrao_id: contaPadraoRecId || null,
+        palavras_chave_extrato: palavrasChaveRec || null,
+        ativo: true,
+      }
+
+      if (recorrenteEditando) {
+        const { error } = await supabase
+          .from('despesas_recorrentes')
+          .update(payload)
+          .eq('id', recorrenteEditando.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase
+          .from('despesas_recorrentes')
+          .insert([payload])
+        if (error) throw error
+      }
+
+      await carregarDados()
+      setModalRecorrenteAberto(false)
+      alert(`Compromisso ${recorrenteEditando ? 'atualizado' : 'cadastrado'} com sucesso!`)
+    } catch (err: any) {
+      alert('Erro ao salvar compromisso recorrente: ' + err.message)
+    } finally {
+      setSalvandoRecorrente(false)
+    }
+  }
+
+  const excluirRecorrente = async (id: string, nome: string) => {
+    if (!confirm(`Deseja realmente excluir o controle de "${nome}"?`)) return
+    try {
+      const { error } = await supabase.from('despesas_recorrentes').delete().eq('id', id)
+      if (error) throw error
+      setRecorrentes(recorrentes.filter((r) => r.id !== id))
+    } catch (err: any) {
+      alert('Erro ao excluir: ' + err.message)
+    }
+  }
+
+  const quitarParcelaManual = async (r: DespesaRecorrente) => {
+    const proxParcela = (r.parcelas_pagas || 0) + 1
+    if (!confirm(`Confirmar o pagamento da parcela ${proxParcela}/${r.total_parcelas || '?'} de R$ ${Number(r.valor_parcela).toFixed(2)} para "${r.nome}"?`)) {
+      return
+    }
+
+    try {
+      const novoPagas = (r.parcelas_pagas || 0) + 1
+      const novoSaldoDevedor = r.saldo_devedor_total
+        ? Math.max(0, Number(r.saldo_devedor_total) - Number(r.valor_parcela))
+        : null
+
+      // 1. Atualizar o empréstimo
+      await supabase
+        .from('despesas_recorrentes')
+        .update({
+          parcelas_pagas: novoPagas,
+          saldo_devedor_total: novoSaldoDevedor,
+        })
+        .eq('id', r.id)
+
+      // 2. Lançar transação de despesa fixa paga
+      const hoje = new Date().toISOString().split('T')[0]
+      await supabase.from('transacoes_financeiras').insert([
+        {
+          descricao: `Parcela ${novoPagas}/${r.total_parcelas || '?'} - ${r.nome}`,
+          tipo: 'despesa_fixa',
+          valor: r.valor_parcela,
+          data_vencimento: hoje,
+          data_pagamento: hoje,
+          status: 'pago',
+          conta_id: r.conta_padrao_id || null,
+          recorrencia_id: r.id,
+        },
+      ])
+
+      // 3. Debitar da conta padrão se houver
+      if (r.conta_padrao_id) {
+        const contaAlvo = contas.find((c) => c.id === r.conta_padrao_id)
+        if (contaAlvo) {
+          await supabase
+            .from('contas_bancarias')
+            .update({
+              saldo_atual: Number(contaAlvo.saldo_atual || 0) - Number(r.valor_parcela),
+            })
+            .eq('id', contaAlvo.id)
+        }
+      }
+
+      await carregarDados()
+      alert(`Parcela ${novoPagas} de ${r.nome} quitada com sucesso!`)
+    } catch (err: any) {
+      alert('Erro ao quitar parcela: ' + err.message)
     }
   }
 
@@ -568,7 +744,7 @@ export default function FinancasPage() {
     }
   }
 
-  // Importar Extrato Bancário ou Fatura de Cartão
+  // Importar Extrato Bancário ou Fatura de Cartão (com Conciliação Inteligente de Empréstimos)
   const analisarDocumentoIA = async () => {
     if (!arquivoDoc || analisandoDoc) return
 
@@ -587,6 +763,41 @@ export default function FinancasPage() {
       }
 
       const resultado: DocumentoFinanceiroExtraido = await response.json()
+
+      // Cruzar e sugerir conciliação com empréstimos e recorrências cadastradas
+      if (resultado.transacoes && recorrentes.length > 0) {
+        resultado.transacoes = resultado.transacoes.map((t) => {
+          const match = recorrentes.find((r) => {
+            const descLower = t.descricao.toLowerCase()
+            const nomeLower = r.nome.toLowerCase()
+
+            // Match por palavra chave ou nome
+            const matchNome = descLower.includes(nomeLower)
+            const matchKeywords = r.palavras_chave_extrato
+              ? r.palavras_chave_extrato
+                  .toLowerCase()
+                  .split(',')
+                  .some((kw) => kw.trim() && descLower.includes(kw.trim()))
+              : false
+
+            // Match por valor aproximado (margem de 1%)
+            const matchValor = Math.abs(t.valor - Number(r.valor_parcela)) < 1.0
+
+            return (matchNome || matchKeywords) && (matchValor || t.tipo === 'despesa')
+          })
+
+          if (match) {
+            const prox = (match.parcelas_pagas || 0) + 1
+            return {
+              ...t,
+              recorrencia_id: match.id,
+              descricao: `[Conciliado: ${match.nome} - Parc. ${prox}/${match.total_parcelas || '?'}] ${t.descricao}`,
+            }
+          }
+          return t
+        })
+      }
+
       setDadosDoc(resultado)
       setTransacoesSelecionadas(resultado.transacoes.map((_, idx) => idx))
     } catch (err: any) {
@@ -634,6 +845,7 @@ export default function FinancasPage() {
             data_pagamento: isFatura ? null : t.data || hoje,
             status: (isFatura ? 'pendente' : 'pago') as any,
             conta_id: contaDocId || null,
+            recorrencia_id: t.recorrencia_id || null,
             observacoes: `Importado via OCR (${dadosDoc.instituicao || 'Documento'}) | Anexo: ${nomeArquivo}`,
           }
         })
@@ -644,6 +856,28 @@ export default function FinancasPage() {
 
       if (erroInsert) throw erroInsert
 
+      // Atualizar amortização das recorrências / empréstimos conciliados
+      for (const t of transacoesParaInserir) {
+        if (t.recorrencia_id) {
+          const recAlvo = recorrentes.find((r) => r.id === t.recorrencia_id)
+          if (recAlvo) {
+            const novoPagas = (recAlvo.parcelas_pagas || 0) + 1
+            const novoSaldo = recAlvo.saldo_devedor_total
+              ? Math.max(0, Number(recAlvo.saldo_devedor_total) - t.valor)
+              : null
+
+            await supabase
+              .from('despesas_recorrentes')
+              .update({
+                parcelas_pagas: novoPagas,
+                saldo_devedor_total: novoSaldo,
+              })
+              .eq('id', recAlvo.id)
+          }
+        }
+      }
+
+      // Atualizar saldo da conta caso seja extrato de conta corrente já pago
       if (contaDocId && dadosDoc.tipo_documento === 'extrato_bancario') {
         const delta = transacoesParaInserir.reduce((acc, t) => {
           return t.tipo === 'receita' ? acc + t.valor : acc - t.valor
@@ -662,7 +896,7 @@ export default function FinancasPage() {
       setModalDocAberto(false)
       setArquivoDoc(null)
       setDadosDoc(null)
-      alert(`Sucesso! ${transacoesParaInserir.length} lançamentos foram importados e salvos no financeiro.`)
+      alert(`Sucesso! ${transacoesParaInserir.length} lançamentos foram importados, conciliados e salvos no financeiro.`)
     } catch (err: any) {
       alert('Erro ao salvar lançamentos no banco: ' + err.message)
     } finally {
@@ -679,13 +913,16 @@ export default function FinancasPage() {
             Finanças & Fluxo de Caixa
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Contas bancárias, cofrinhos, extratos bancários e faturas de cartão conciliados.
+            Contas bancárias, cofrinhos, empréstimos recorrentes e faturas conciliadas.
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           <button onClick={() => setModalContaAberto(true)} className="btn btn-secondary">
             🏦 + Nova Conta
+          </button>
+          <button onClick={iniciarCriacaoRecorrente} className="btn btn-secondary">
+            📋 + Empréstimo / Recorrência
           </button>
           <button onClick={() => setModalContrachequeAberto(true)} className="btn btn-secondary">
             📄 Importar Contracheque
@@ -701,7 +938,7 @@ export default function FinancasPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Minhas Contas & Carteiras</h2>
           <span style={{ fontSize: '0.875rem', color: 'var(--texto-secundario)' }}>
-            Saldo Total Consolidado: <strong>R$ {contas.reduce((acc, c) => acc + Number(c.saldo_atual || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
+            Saldo Consolidado: <strong>R$ {contas.reduce((acc, c) => acc + Number(c.saldo_atual || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
           </span>
         </div>
 
@@ -729,7 +966,121 @@ export default function FinancasPage() {
         )}
       </div>
 
-      {/* Seção 2: Cofrinhos / Metas da Família (com Criar, Editar, Excluir, Aportar e Resgatar) */}
+      {/* Seção 2: Empréstimos & Despesas Recorrentes (com Controle de Quitação e Parcelas) */}
+      <div style={{ marginBottom: '32px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+          <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Empréstimos & Despesas Recorrentes</h2>
+          <button
+            type="button"
+            onClick={iniciarCriacaoRecorrente}
+            className="btn btn-secondary"
+            style={{ padding: '6px 14px', fontSize: '0.825rem' }}
+          >
+            📋 + Cadastrar Empréstimo
+          </button>
+        </div>
+
+        {recorrentes.length === 0 && !carregando ? (
+          <div className="card" style={{ padding: '32px', textAlign: 'center', color: 'var(--texto-secundario)' }}>
+            Nenhum empréstimo ou despesa recorrente cadastrada. Clique em "+ Cadastrar Empréstimo" para controlar parcelas e amortização.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
+            {recorrentes.map((rec) => {
+              const isEmprestimo = rec.tipo === 'emprestimo' || rec.tipo === 'financiamento'
+              const totalParc = rec.total_parcelas || 0
+              const pagas = rec.parcelas_pagas || 0
+              const porcentagem = totalParc > 0 ? Math.min(Math.round((pagas / totalParc) * 100), 100) : 0
+              const contaVinculada = contas.find((c) => c.id === rec.conta_padrao_id)
+
+              return (
+                <div key={rec.id} className="card" style={{ borderLeft: isEmprestimo ? '4px solid var(--cor-alerta)' : '4px solid var(--cor-primaria)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                    <div>
+                      <span style={{ fontWeight: 600, fontSize: '1rem' }}>{rec.nome}</span>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+                        {contaVinculada ? `Débito em: ${contaVinculada.nome}` : 'Sem débito automático'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <span className={`badge ${isEmprestimo ? 'badge-warning' : 'badge-primary'}`}>
+                        {rec.tipo.toUpperCase()}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => iniciarEdicaoRecorrente(rec)}
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 6px', fontSize: '0.75rem' }}
+                        title="Editar"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => excluirRecorrente(rec.id, rec.nome)}
+                        className="btn btn-secondary"
+                        style={{ padding: '2px 6px', fontSize: '0.75rem', color: 'var(--cor-perigo)' }}
+                        title="Excluir"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '12px' }}>
+                    <div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>Valor da Parcela</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--cor-perigo)' }}>
+                        R$ {Number(rec.valor_parcela).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>Vencimento</div>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>Todo dia {rec.dia_vencimento}</div>
+                    </div>
+                  </div>
+
+                  {/* Informações de Quitação de Empréstimo */}
+                  {isEmprestimo && totalParc > 0 && (
+                    <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--borda)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '6px' }}>
+                        <span>
+                          Parcelas: <strong>{pagas} de {totalParc} pagas</strong>
+                        </span>
+                        <span style={{ fontWeight: 600, color: 'var(--cor-primaria)' }}>{porcentagem}%</span>
+                      </div>
+                      <div style={{ width: '100%', height: '8px', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--raio-full)', overflow: 'hidden' }}>
+                        <div style={{ width: `${porcentagem}%`, height: '100%', backgroundColor: 'var(--cor-sucesso)', borderRadius: 'var(--raio-full)' }} />
+                      </div>
+
+                      {rec.saldo_devedor_total !== null && rec.saldo_devedor_total !== undefined && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '8px' }}>
+                          <span>Saldo Devedor Restante:</span>
+                          <strong>R$ {Number(rec.saldo_devedor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: '16px' }}>
+                    <button
+                      type="button"
+                      onClick={() => quitarParcelaManual(rec)}
+                      className="btn btn-secondary"
+                      style={{ width: '100%', fontSize: '0.8rem', padding: '6px 12px' }}
+                    >
+                      ✓ Registrar Pagamento da Parcela {pagas + 1}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Seção 3: Cofrinhos / Metas da Família (com Criar, Editar, Excluir, Aportar e Resgatar) */}
       <div style={{ marginBottom: '32px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
           <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Cofrinhos & Metas da Família</h2>
@@ -819,6 +1170,171 @@ export default function FinancasPage() {
           </div>
         )}
       </div>
+
+      {/* Modal de Criação / Edição de Empréstimo ou Recorrência */}
+      {modalRecorrenteAberto && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '16px',
+          }}
+        >
+          <div className="card" style={{ width: '100%', maxWidth: '540px', backgroundColor: 'var(--bg-card)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>
+                {recorrenteEditando ? '✏️ Editar Empréstimo / Recorrência' : '📋 Novo Empréstimo / Recorrência'}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setModalRecorrenteAberto(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSalvarRecorrente} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Identificação do Empréstimo / Despesa</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Ex: Empréstimo Pessoal Nubank, Financiamento Imobiliário"
+                  value={nomeRec}
+                  onChange={(e) => setNomeRec(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Tipo de Recorrência</label>
+                  <select
+                    className="input"
+                    value={tipoRec}
+                    onChange={(e) => setTipoRec(e.target.value as any)}
+                  >
+                    <option value="emprestimo">Empréstimo</option>
+                    <option value="financiamento">Financiamento</option>
+                    <option value="despesa_fixa">Despesa Fixa (ex: Aluguel)</option>
+                    <option value="assinatura">Assinatura</option>
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Valor da Parcela (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="input"
+                    placeholder="650.00"
+                    value={valorParcelaRec}
+                    onChange={(e) => setValorParcelaRec(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Dia do Vencimento</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    className="input"
+                    value={diaVencimentoRec}
+                    onChange={(e) => setDiaVencimentoRec(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Total de Parcelas</label>
+                  <input
+                    type="number"
+                    min="1"
+                    className="input"
+                    placeholder="Ex: 36"
+                    value={totalParcelasRec}
+                    onChange={(e) => setTotalParcelasRec(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Parcelas Pagas</label>
+                  <input
+                    type="number"
+                    min="0"
+                    className="input"
+                    value={parcelasPagasRec}
+                    onChange={(e) => setParcelasPagasRec(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Saldo Devedor Total (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="input"
+                    placeholder="Ex: 15400.00"
+                    value={saldoDevedorRec}
+                    onChange={(e) => setSaldoDevedorRec(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Conta de Débito Padrão</label>
+                  <select
+                    className="input"
+                    value={contaPadraoRecId}
+                    onChange={(e) => setContaPadraoRecId(e.target.value)}
+                  >
+                    <option value="">Nenhuma conta padrão</option>
+                    {contas.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Palavras-chave no Extrato (para Conciliação Automática)</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Ex: EMP NUBANK, DEB EMPRESTIMO, PARC EMP"
+                  value={palavrasChaveRec}
+                  onChange={(e) => setPalavrasChaveRec(e.target.value)}
+                />
+                <span style={{ fontSize: '0.725rem', color: 'var(--texto-secundario)', marginTop: '4px', display: 'block' }}>
+                  A IA usará esses termos para identificar e abater as parcelas ao importar extratos bancários.
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
+                <button type="button" onClick={() => setModalRecorrenteAberto(false)} className="btn btn-secondary">
+                  Cancelar
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={salvandoRecorrente}>
+                  {salvandoRecorrente ? 'Salvando...' : recorrenteEditando ? 'Salvar Alterações' : 'Cadastrar Compromisso'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal de Criação / Edição de Cofrinho */}
       {modalCofrinhoCriarAberto && (
@@ -1019,12 +1535,12 @@ export default function FinancasPage() {
             padding: '16px',
           }}
         >
-          <div className="card" style={{ width: '100%', maxWidth: '780px', maxHeight: '90vh', overflowY: 'auto', backgroundColor: 'var(--bg-card)' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '820px', maxHeight: '90vh', overflowY: 'auto', backgroundColor: 'var(--bg-card)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <div>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>💳 Importar Fatura de Cartão ou Extrato</h2>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>💳 Importar Extrato Bancário ou Fatura</h2>
                 <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
-                  O Gemini 2.5 Flash extrai cada compra individualmente para inserção no fluxo de caixa.
+                  Conciliação automática de débitos de empréstimos e compras individuais via Gemini 2.5 Flash.
                 </p>
               </div>
               <button
@@ -1059,7 +1575,7 @@ export default function FinancasPage() {
                 style={{ width: '100%', marginBottom: '16px' }}
                 disabled={analisandoDoc}
               >
-                {analisandoDoc ? 'Extraindo compras e movimentações com Gemini 2.5 Flash... 🧠' : '✨ Extrair Transações com IA'}
+                {analisandoDoc ? 'Extraindo lançamentos e conciliando empréstimos com Gemini 2.5 Flash... 🧠' : '✨ Extrair e Conciliar com IA'}
               </button>
             )}
 
@@ -1096,7 +1612,7 @@ export default function FinancasPage() {
                 </div>
 
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Vincular estas compras a qual Conta Bancária / Cartão?</label>
+                  <label className="form-label">Vincular estas movimentações a qual Conta Bancária / Cartão?</label>
                   <select
                     className="input"
                     value={contaDocId}
@@ -1111,7 +1627,7 @@ export default function FinancasPage() {
                   </select>
                 </div>
 
-                {/* Lista de Transações com Seleção Individual */}
+                {/* Lista de Transações com Seleção Individual e Destaque de Conciliação */}
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                     <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>
@@ -1132,14 +1648,13 @@ export default function FinancasPage() {
                     </button>
                   </div>
 
-                  <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--borda)', borderRadius: 'var(--raio-md)' }}>
+                  <div style={{ maxHeight: '250px', overflowY: 'auto', border: '1px solid var(--borda)', borderRadius: 'var(--raio-md)' }}>
                     <table className="tabela" style={{ fontSize: '0.8rem' }}>
                       <thead>
                         <tr>
                           <th style={{ width: '40px' }}>✓</th>
                           <th>Data</th>
-                          <th>Estabelecimento / Lançamento</th>
-                          <th>Categoria</th>
+                          <th>Lançamento / Estabelecimento</th>
                           <th>Tipo</th>
                           <th style={{ textAlign: 'right' }}>Valor</th>
                         </tr>
@@ -1147,11 +1662,20 @@ export default function FinancasPage() {
                       <tbody>
                         {dadosDoc.transacoes.map((t, idx) => {
                           const selecionado = transacoesSelecionadas.includes(idx)
+                          const conciliado = Boolean(t.recorrencia_id)
+
                           return (
                             <tr
                               key={idx}
                               onClick={() => toggleTransacaoSelecionada(idx)}
-                              style={{ cursor: 'pointer', backgroundColor: selecionado ? 'var(--cor-primaria-suave)' : 'inherit' }}
+                              style={{
+                                cursor: 'pointer',
+                                backgroundColor: conciliado
+                                  ? 'var(--cor-alerta-suave)'
+                                  : selecionado
+                                  ? 'var(--cor-primaria-suave)'
+                                  : 'inherit',
+                              }}
                             >
                               <td>
                                 <input
@@ -1162,8 +1686,10 @@ export default function FinancasPage() {
                                 />
                               </td>
                               <td>{t.data || '-'}</td>
-                              <td style={{ fontWeight: 500 }}>{t.descricao}</td>
-                              <td>{t.categoria_sugerida || 'Geral'}</td>
+                              <td style={{ fontWeight: 500 }}>
+                                {conciliado && <span className="badge badge-warning" style={{ marginRight: '6px' }}>Conciliado</span>}
+                                {t.descricao}
+                              </td>
                               <td>
                                 <span className={`badge ${t.tipo === 'receita' ? 'badge-success' : 'badge-danger'}`}>
                                   {t.tipo}
@@ -1638,9 +2164,14 @@ export default function FinancasPage() {
               <tbody>
                 {transacoes.map((t) => {
                   const contaVinculada = contas.find((c) => c.id === t.conta_id)
+                  const isRecorrente = Boolean(t.recorrencia_id)
+
                   return (
                     <tr key={t.id}>
-                      <td style={{ fontWeight: 500 }}>{t.descricao}</td>
+                      <td style={{ fontWeight: 500 }}>
+                        {isRecorrente && <span className="badge badge-warning" style={{ marginRight: '6px' }}>Recorrente</span>}
+                        {t.descricao}
+                      </td>
                       <td>
                         <span style={{ textTransform: 'capitalize' }}>
                           {t.tipo.replace('_', ' ')}
