@@ -634,6 +634,30 @@ export default function RotinasPage() {
     return t.responsavel_id === membroFiltroId
   })
 
+  // Ordenação: Tarefas habilitadas para conclusão hoje ficam sempre no topo da lista!
+  const tarefasOrdenadas = [...tarefasFiltradas].sort((a, b) => {
+    const dispA = verificarDisponibilidade(a)
+    const dispB = verificarDisponibilidade(b)
+
+    // Peso 0: Habilitada e pronta para concluir hoje (TOPO)
+    // Peso 1: Já concluída hoje
+    // Peso 2: Desabilitada (bloqueada por data ou pertencente a outro membro) (FINAL)
+    const getPeso = (d: ReturnType<typeof verificarDisponibilidade>) => {
+      if (d.podeConcluir && !d.concluidaHoje) return 0
+      if (d.concluidaHoje) return 1
+      return 2
+    }
+
+    const pesoA = getPeso(dispA)
+    const pesoB = getPeso(dispB)
+
+    if (pesoA !== pesoB) {
+      return pesoA - pesoB
+    }
+
+    return a.titulo.localeCompare(b.titulo)
+  })
+
   return (
     <div>
       {/* Topo / Header */}
