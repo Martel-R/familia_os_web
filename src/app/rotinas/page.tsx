@@ -18,6 +18,7 @@ interface Tarefa {
   id: string
   titulo: string
   responsavel_id?: string
+  aberta_para_todos?: boolean
   recorrencia: 'unica' | 'diaria' | 'semanal' | 'mensal'
   dias_semana?: string
   dia_mes?: number
@@ -189,7 +190,11 @@ export default function RotinasPage() {
         // Reset diário: tarefas recorrentes concluídas em dia anterior voltam a ficar pendentes para o novo ciclo!
         const tarefasAjustadas: Tarefa[] = tarefasData.map((t) => {
           if (t.recorrencia !== 'unica' && t.esta_concluida && t.ultima_conclusao_data !== dataHojeInfo.dataHojeStr) {
-            return { ...t, esta_concluida: false }
+            return {
+              ...t,
+              esta_concluida: false,
+              responsavel_id: t.aberta_para_todos ? undefined : t.responsavel_id,
+            }
           }
           return t
         })
@@ -201,11 +206,13 @@ export default function RotinasPage() {
           (t) => t.recorrencia !== 'unica' && t.esta_concluida && t.ultima_conclusao_data !== dataHojeInfo.dataHojeStr
         )
         if (tarefasParaResetarNoBanco.length > 0) {
-          const idsParaReset = tarefasParaResetarNoBanco.map((t) => t.id)
-          await supabase
-            .from('tarefas_rotinas')
-            .update({ esta_concluida: false })
-            .in('id', idsParaReset)
+          for (const t of tarefasParaResetarNoBanco) {
+            const payloadReset: any = { esta_concluida: false }
+            if (t.aberta_para_todos) {
+              payloadReset.responsavel_id = null
+            }
+            await supabase.from('tarefas_rotinas').update(payloadReset).eq('id', t.id)
+          }
         }
       }
 
@@ -257,11 +264,13 @@ export default function RotinasPage() {
       (tarefa.recorrencia === 'unica' || tarefa.ultima_conclusao_data === hoje.dataHojeStr)
 
     const responsavel = usuarios.find((u) => u.id === tarefa.responsavel_id)
+    const ehAberta = Boolean(tarefa.aberta_para_todos || !tarefa.responsavel_id)
 
-    // Trava de Responsabilidade: Se a tarefa possui um responsável definido,
-    // somente o próprio responsável pode marcá-la como concluída.
+    // Trava de Responsabilidade:
+    // Se for aberta para todos, qualquer membro conectado pode fazer!
+    // Se tiver responsável fixo, somente esse responsável pode fazer.
     const ehMinhaResponsabilidade =
-      !tarefa.responsavel_id || (usuarioLogadoId ? tarefa.responsavel_id === usuarioLogadoId : true)
+      ehAberta || (usuarioLogadoId ? tarefa.responsavel_id === usuarioLogadoId : true)
 
     let disponivelHoje = false
     let mensagemTempo = ''
@@ -305,21 +314,24 @@ export default function RotinasPage() {
     const podeConcluir = disponivelHoje && ehMinhaResponsabilidade
 
     let mensagemFinal = mensagemTempo
-    if (!ehMinhaResponsabilidade) {
+    if (!ehMinhaResponsabilidade && !ehAberta) {
       mensagemFinal = `Atribuída a ${responsavel?.nome || 'outro membro'}`
+    } else if (ehAberta && !concluidaHoje) {
+      mensagemFinal = 'Disponível para qualquer membro'
     }
 
     return {
       disponivelHoje,
       concluidaHoje,
       ehMinhaResponsabilidade,
+      ehAberta,
       podeConcluir,
       mensagemStatus: mensagemFinal,
       nomeResponsavel: responsavel?.nome,
     }
   }
 
-  // Checkbox de Conclusão de Tarefa com Trava de Dias e Responsabilidade
+  // Checkbox de Conclusão de Tarefa com Trava de Dias e Atribuição Automática
   const toggleTarefa = async (tarefa: Tarefa) => {
     const disp = verificarDisponibilidade(tarefa)
 
@@ -338,8 +350,9 @@ export default function RotinasPage() {
     const novoStatus = !disp.concluidaHoje
     const moedasDelta = tarefa.moedas_recompensa || 0
 
+    // Se for tarefa aberta, quem clicou ganha os pontos e é atribuído como autor da conclusão
     const idAlvo =
-      tarefa.responsavel_id ||
+      (!disp.ehAberta && tarefa.responsavel_id) ||
       (membroFiltroId !== 'todos' ? membroFiltroId : usuarioLogadoId) ||
       membrosAtivos[0]?.id
 
@@ -351,20 +364,22 @@ export default function RotinasPage() {
               ...t,
               esta_concluida: novoStatus,
               ultima_conclusao_data: novoStatus ? hoje.dataHojeStr : undefined,
-              responsavel_id: t.responsavel_id || idAlvo,
+              responsavel_id: novoStatus ? idAlvo : (disp.ehAberta ? undefined : t.responsavel_id),
             }
           : t
       )
     )
 
     try {
-      // 1. Atualizar a tarefa no banco com data da conclusão
+      // 1. Atualizar a tarefa no banco com data da conclusão e atribuir a quem concluiu
       const payloadTarefa: any = {
         esta_concluida: novoStatus,
         ultima_conclusao_data: novoStatus ? hoje.dataHojeStr : null,
         atualizado_em: new Date().toISOString(),
       }
-      if (!tarefa.responsavel_id && idAlvo) {
+      if (disp.ehAberta) {
+        payloadTarefa.responsavel_id = novoStatus ? idAlvo : null
+      } else if (!tarefa.responsavel_id && idAlvo) {
         payloadTarefa.responsavel_id = idAlvo
       }
 
@@ -420,7 +435,7 @@ export default function RotinasPage() {
     setDiasSelecionados([])
     setDiaMes(hoje.diaMesNum)
     setMoedas('10')
-    const padrao = membroFiltroId !== 'todos' ? membroFiltroId : (usuarioLogadoId || membrosAtivos[0]?.id || '')
+    const padrao = membroFiltroId !== 'todos' ? membroFiltroId : ''
     setResponsavelId(padrao)
     setModalTarefaAberto(true)
   }
@@ -445,6 +460,7 @@ export default function RotinasPage() {
       const payload: any = {
         titulo: titulo.trim(),
         responsavel_id: responsavelId || null,
+        aberta_para_todos: !responsavelId,
         recorrencia,
         moedas_recompensa: parseInt(moedas) || 0,
         esta_concluida: tarefaEditando ? tarefaEditando.esta_concluida : false,
@@ -811,9 +827,13 @@ export default function RotinasPage() {
                         </div>
 
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '4px', flexWrap: 'wrap' }}>
-                          {responsavel && (
+                          {responsavel ? (
                             <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--cor-primaria)' }}>
                               {responsavel.avatar_url || '👤'} {responsavel.nome}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--cor-sucesso)' }}>
+                              👥 Aberta para todos
                             </span>
                           )}
 
@@ -826,6 +846,8 @@ export default function RotinasPage() {
                             className={`badge ${
                               disp.concluidaHoje
                                 ? 'badge-success'
+                                : disp.ehAberta
+                                ? 'badge-primary'
                                 : !disp.ehMinhaResponsabilidade
                                 ? 'badge-secondary'
                                 : disp.disponivelHoje
@@ -835,7 +857,9 @@ export default function RotinasPage() {
                             style={{ fontSize: '0.7rem' }}
                           >
                             {disp.concluidaHoje
-                              ? '✓ Feita hoje'
+                              ? `✓ Feita hoje por ${responsavel?.nome || 'você'}`
+                              : disp.ehAberta
+                              ? '👥 Aberta para todos'
                               : !disp.ehMinhaResponsabilidade
                               ? `👤 Pertence a ${disp.nomeResponsavel || 'outro'}`
                               : disp.disponivelHoje
@@ -1070,7 +1094,7 @@ export default function RotinasPage() {
                     value={responsavelId}
                     onChange={(e) => setResponsavelId(e.target.value)}
                   >
-                    <option value="">Sem responsável atribuído</option>
+                    <option value="">👥 Aberta para todos (Sem responsável fixo)</option>
                     {membrosAtivos.map((u) => (
                       <option key={u.id} value={u.id}>
                         {u.avatar_url || '👤'} {u.nome}
