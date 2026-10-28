@@ -13,8 +13,9 @@ interface ItemNavegacao {
 const ITENS_MENU: ItemNavegacao[] = [
   { rotulo: 'Painel Geral', caminho: '/', icone: '📊' },
   { rotulo: 'Finanças', caminho: '/financas', icone: '💰' },
-  { rotulo: 'Eventos', caminho: '/eventos', icone: '🎉' },
   { rotulo: 'Rotinas & Gamificação', caminho: '/rotinas', icone: '⭐' },
+  { rotulo: 'Membros da Família', caminho: '/usuarios', icone: '👥' },
+  { rotulo: 'Eventos', caminho: '/eventos', icone: '🎉' },
   { rotulo: 'Saúde & Bem-Estar', caminho: '/saude', icone: '🩺' },
   { rotulo: 'Inventário & Casa', caminho: '/inventario', icone: '📦' },
   { rotulo: 'Cofre de Senhas', caminho: '/cofre', icone: '🔐' },
