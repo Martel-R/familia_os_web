@@ -88,6 +88,10 @@ export default function FinancasPage() {
   const [carregando, setCarregando] = useState(true)
   const [salvando, setSalvando] = useState(false)
 
+  // Paginação da tabela de transações (20 registros por página)
+  const ITENS_POR_PAGINA = 20
+  const [paginaAtual, setPaginaAtual] = useState(1)
+
   // Formulário manual de transação
   const [descricao, setDescricao] = useState('')
   const [valor, setValor] = useState('')
@@ -112,7 +116,7 @@ export default function FinancasPage() {
   const [dataLimiteCofrinho, setDataLimiteCofrinho] = useState('')
   const [salvandoCofrinho, setSalvandoCofrinho] = useState(false)
 
-  // Modal de Criação / Edição de Empréstimo ou Despesa Recorrente
+  // Modal de Criação / Edição de Empréstimo ou Recorrência
   const [modalRecorrenteAberto, setModalRecorrenteAberto] = useState(false)
   const [recorrenteEditando, setRecorrenteEditando] = useState<DespesaRecorrente | null>(null)
   const [nomeRec, setNomeRec] = useState('')
@@ -200,7 +204,7 @@ export default function FinancasPage() {
       const { data: transacoesData } = await supabase
         .from('transacoes_financeiras')
         .select('*')
-        .order('criado_em', { ascending: false })
+        .order('data_vencimento', { ascending: false })
 
       if (transacoesData) {
         setTransacoes(transacoesData)
@@ -215,6 +219,56 @@ export default function FinancasPage() {
   useEffect(() => {
     carregarDados()
   }, [])
+
+  // Agrupamento mensal para o gráfico de Entradas vs Saídas
+  const dadosGrafico = (() => {
+    const mapa: { [mes: string]: { receitas: number; despesas: number } } = {}
+
+    transacoes.forEach((t) => {
+      const chaveAnoMes = t.data_vencimento ? t.data_vencimento.substring(0, 7) : '2026-10'
+      if (!mapa[chaveAnoMes]) {
+        mapa[chaveAnoMes] = { receitas: 0, despesas: 0 }
+      }
+      const v = Number(t.valor) || 0
+      if (t.tipo === 'receita') {
+        mapa[chaveAnoMes].receitas += v
+      } else {
+        mapa[chaveAnoMes].despesas += v
+      }
+    })
+
+    const chavesOrdenadas = Object.keys(mapa).sort()
+
+    if (chavesOrdenadas.length === 0) {
+      return [{ chave: '2026-10', rotulo: 'Out/26', receitas: 0, despesas: 0 }]
+    }
+
+    const nomesMeses: { [m: string]: string } = {
+      '01': 'Jan', '02': 'Fev', '03': 'Mar', '04': 'Abr', '05': 'Mai', '06': 'Jun',
+      '07': 'Jul', '08': 'Ago', '09': 'Set', '10': 'Out', '11': 'Nov', '12': 'Dez',
+    }
+
+    return chavesOrdenadas.slice(-6).map((chave) => {
+      const [ano, mes] = chave.split('-')
+      const rotulo = `${nomesMeses[mes] || mes}/${ano ? ano.substring(2) : ''}`
+      return {
+        chave,
+        rotulo,
+        receitas: mapa[chave].receitas,
+        despesas: mapa[chave].despesas,
+      }
+    })
+  })()
+
+  const maxValorGrafico = Math.max(
+    ...dadosGrafico.map((d) => Math.max(d.receitas, d.despesas)),
+    1000
+  )
+
+  // Cálculo da Paginação
+  const totalPaginas = Math.ceil(transacoes.length / ITENS_POR_PAGINA) || 1
+  const indiceInicio = (paginaAtual - 1) * ITENS_POR_PAGINA
+  const transacoesPaginadas = transacoes.slice(indiceInicio, indiceInicio + ITENS_POR_PAGINA)
 
   // Cadastrar Nova Conta Bancária
   const handleCriarConta = async (e: React.FormEvent) => {
@@ -424,7 +478,6 @@ export default function FinancasPage() {
         ? Math.max(0, Number(r.saldo_devedor_total) - Number(r.valor_parcela))
         : null
 
-      // 1. Atualizar o empréstimo
       await supabase
         .from('despesas_recorrentes')
         .update({
@@ -433,7 +486,6 @@ export default function FinancasPage() {
         })
         .eq('id', r.id)
 
-      // 2. Lançar transação de despesa fixa paga
       const hoje = new Date().toISOString().split('T')[0]
       await supabase.from('transacoes_financeiras').insert([
         {
@@ -448,7 +500,6 @@ export default function FinancasPage() {
         },
       ])
 
-      // 3. Debitar da conta padrão se houver
       if (r.conta_padrao_id) {
         const contaAlvo = contas.find((c) => c.id === r.conta_padrao_id)
         if (contaAlvo) {
@@ -487,7 +538,6 @@ export default function FinancasPage() {
           ? Number(cofre.saldo_atual || 0) + val
           : Math.max(0, Number(cofre.saldo_atual || 0) - val)
 
-      // 1. Atualizar saldo do cofrinho
       const { error: errCofre } = await supabase
         .from('cofrinhos')
         .update({ saldo_atual: novoSaldoCofre })
@@ -495,7 +545,6 @@ export default function FinancasPage() {
 
       if (errCofre) throw errCofre
 
-      // 2. Atualizar saldo da conta bancária vinculada
       if (contaAporteId) {
         const contaAlvo = contas.find((c) => c.id === contaAporteId)
         if (contaAlvo) {
@@ -511,7 +560,6 @@ export default function FinancasPage() {
         }
       }
 
-      // 3. Registrar no histórico de aportes
       await supabase.from('cofrinhos_aportes').insert([
         {
           cofrinho_id: cofre.id,
@@ -525,7 +573,6 @@ export default function FinancasPage() {
         },
       ])
 
-      // 4. Registrar no fluxo de transações para transparência
       const hoje = new Date().toISOString().split('T')[0]
       await supabase.from('transacoes_financeiras').insert([
         {
@@ -764,14 +811,12 @@ export default function FinancasPage() {
 
       const resultado: DocumentoFinanceiroExtraido = await response.json()
 
-      // Cruzar e sugerir conciliação com empréstimos e recorrências cadastradas
       if (resultado.transacoes && recorrentes.length > 0) {
         resultado.transacoes = resultado.transacoes.map((t) => {
           const match = recorrentes.find((r) => {
             const descLower = t.descricao.toLowerCase()
             const nomeLower = r.nome.toLowerCase()
 
-            // Match por palavra chave ou nome
             const matchNome = descLower.includes(nomeLower)
             const matchKeywords = r.palavras_chave_extrato
               ? r.palavras_chave_extrato
@@ -780,9 +825,7 @@ export default function FinancasPage() {
                   .some((kw) => kw.trim() && descLower.includes(kw.trim()))
               : false
 
-            // Match por valor aproximado (margem de 1%)
             const matchValor = Math.abs(t.valor - Number(r.valor_parcela)) < 1.0
-
             return (matchNome || matchKeywords) && (matchValor || t.tipo === 'despesa')
           })
 
@@ -856,7 +899,6 @@ export default function FinancasPage() {
 
       if (erroInsert) throw erroInsert
 
-      // Atualizar amortização das recorrências / empréstimos conciliados
       for (const t of transacoesParaInserir) {
         if (t.recorrencia_id) {
           const recAlvo = recorrentes.find((r) => r.id === t.recorrencia_id)
@@ -877,7 +919,6 @@ export default function FinancasPage() {
         }
       }
 
-      // Atualizar saldo da conta caso seja extrato de conta corrente já pago
       if (contaDocId && dadosDoc.tipo_documento === 'extrato_bancario') {
         const delta = transacoesParaInserir.reduce((acc, t) => {
           return t.tipo === 'receita' ? acc + t.valor : acc - t.valor
@@ -907,7 +948,7 @@ export default function FinancasPage() {
   return (
     <div>
       {/* Topo / Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, letterSpacing: '-0.025em' }}>
             Finanças & Fluxo de Caixa
@@ -930,6 +971,80 @@ export default function FinancasPage() {
           <button onClick={() => setModalDocAberto(true)} className="btn btn-primary">
             💳 Importar Fatura / Extrato (IA)
           </button>
+        </div>
+      </div>
+
+      {/* Gráfico Mensal de Fluxo de Caixa (Entradas vs Saídas) */}
+      <div className="card" style={{ marginBottom: '32px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>📊 Fluxo de Caixa Mensal (Entradas vs Saídas)</h2>
+            <p style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+              Comparativo consolidado dos últimos meses no schema <code>familialm</code>.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem', fontWeight: 600 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: 'var(--cor-sucesso)' }} />
+              Entradas (Receitas)
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: 'var(--cor-perigo)' }} />
+              Saídas (Despesas)
+            </span>
+          </div>
+        </div>
+
+        {/* Gráfico de Barras Responsivo em Vanilla CSS */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', gap: '16px', height: '200px', paddingTop: '24px', borderBottom: '1px solid var(--borda)' }}>
+          {dadosGrafico.map((mes) => {
+            const alturaRec = Math.max((mes.receitas / maxValorGrafico) * 160, mes.receitas > 0 ? 6 : 0)
+            const alturaDesp = Math.max((mes.despesas / maxValorGrafico) * 160, mes.despesas > 0 ? 6 : 0)
+
+            return (
+              <div key={mes.chave} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', flex: 1, height: '100%', justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end', height: '160px', width: '100%', maxWidth: '64px', justifyContent: 'center' }}>
+                  {/* Barra de Receitas */}
+                  <div
+                    title={`Receitas: R$ ${mes.receitas.toFixed(2)}`}
+                    style={{
+                      width: '24px',
+                      height: `${alturaRec}px`,
+                      backgroundColor: 'var(--cor-sucesso)',
+                      borderRadius: '4px 4px 0 0',
+                      transition: 'height 0.3s ease',
+                    }}
+                  />
+                  {/* Barra de Despesas */}
+                  <div
+                    title={`Despesas: R$ ${mes.despesas.toFixed(2)}`}
+                    style={{
+                      width: '24px',
+                      height: `${alturaDesp}px`,
+                      backgroundColor: 'var(--cor-perigo)',
+                      borderRadius: '4px 4px 0 0',
+                      transition: 'height 0.3s ease',
+                    }}
+                  />
+                </div>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--texto-secundario)' }}>
+                  {mes.rotulo}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Resumo Numérico sob o Gráfico */}
+        <div style={{ display: 'flex', justifyContent: 'space-around', marginTop: '16px', flexWrap: 'wrap', gap: '12px', textAlign: 'center' }}>
+          {dadosGrafico.map((mes) => (
+            <div key={mes.chave} style={{ fontSize: '0.75rem' }}>
+              <div style={{ color: 'var(--texto-secundario)', fontWeight: 500 }}>{mes.rotulo}</div>
+              <div style={{ color: 'var(--cor-sucesso)', fontWeight: 600 }}>+R$ {mes.receitas.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</div>
+              <div style={{ color: 'var(--cor-perigo)', fontWeight: 600 }}>-R$ {mes.despesas.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -1041,7 +1156,6 @@ export default function FinancasPage() {
                     </div>
                   </div>
 
-                  {/* Informações de Quitação de Empréstimo */}
                   {isEmprestimo && totalParc > 0 && (
                     <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--borda)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '6px' }}>
@@ -1168,6 +1282,242 @@ export default function FinancasPage() {
               )
             })}
           </div>
+        )}
+      </div>
+
+      {/* Formulário Rápido de Lançamento Manual com Seleção de Conta */}
+      <div className="card" style={{ marginBottom: '32px' }}>
+        <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '16px' }}>Novo Lançamento Financeiro Manual</h2>
+        <form onSubmit={handleAdicionar} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'flex-end' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Descrição</label>
+            <input
+              type="text"
+              className="input"
+              placeholder="Ex: Conta de Luz"
+              value={descricao}
+              onChange={(e) => setDescricao(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Valor (R$)</label>
+            <input
+              type="number"
+              step="0.01"
+              className="input"
+              placeholder="0,00"
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Tipo</label>
+            <select
+              className="input"
+              value={tipo}
+              onChange={(e) => setTipo(e.target.value as any)}
+            >
+              <option value="despesa_variavel">Despesa Variável</option>
+              <option value="despesa_fixa">Despesa Fixa</option>
+              <option value="assinatura">Assinatura</option>
+              <option value="receita">Receita</option>
+            </select>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Conta Bancária</label>
+            <select
+              className="input"
+              value={contaIdSelecionada}
+              onChange={(e) => setContaIdSelecionada(e.target.value)}
+            >
+              <option value="">Sem vínculo</option>
+              {contas.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Vencimento</label>
+            <input
+              type="date"
+              className="input"
+              value={dataVencimento}
+              onChange={(e) => setDataVencimento(e.target.value)}
+              required
+            />
+          </div>
+
+          <button type="submit" className="btn btn-primary" style={{ height: '42px' }} disabled={salvando}>
+            {salvando ? 'Salvando...' : '+ Lançar'}
+          </button>
+        </form>
+      </div>
+
+      {/* Lista de Transações com Paginação de 20 por página */}
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Transações e Contas</h2>
+            <p style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+              Mostrando {transacoes.length > 0 ? indiceInicio + 1 : 0} a {Math.min(indiceInicio + ITENS_POR_PAGINA, transacoes.length)} de {transacoes.length} lançamentos.
+            </p>
+          </div>
+
+          {/* Controles de Paginação no topo da tabela */}
+          {totalPaginas > 1 && (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setPaginaAtual((p) => Math.max(1, p - 1))}
+                disabled={paginaAtual === 1}
+                className="btn btn-secondary"
+                style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+              >
+                ◀ Anterior
+              </button>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                {paginaAtual} / {totalPaginas}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPaginaAtual((p) => Math.min(totalPaginas, p + 1))}
+                disabled={paginaAtual >= totalPaginas}
+                className="btn btn-secondary"
+                style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+              >
+                Próxima ▶
+              </button>
+            </div>
+          )}
+        </div>
+
+        {transacoes.length === 0 && !carregando ? (
+          <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--texto-secundario)' }}>
+            Nenhuma transação financeira registrada no banco ainda.
+          </div>
+        ) : (
+          <>
+            <div className="tabela-container">
+              <table className="tabela">
+                <thead>
+                  <tr>
+                    <th>Descrição</th>
+                    <th>Tipo</th>
+                    <th>Conta Bancária</th>
+                    <th>Vencimento</th>
+                    <th>Valor</th>
+                    <th>Status</th>
+                    <th style={{ textAlign: 'right' }}>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transacoesPaginadas.map((t) => {
+                    const contaVinculada = contas.find((c) => c.id === t.conta_id)
+                    const isRecorrente = Boolean(t.recorrencia_id)
+
+                    return (
+                      <tr key={t.id}>
+                        <td style={{ fontWeight: 500 }}>
+                          {isRecorrente && <span className="badge badge-warning" style={{ marginRight: '6px' }}>Recorrente</span>}
+                          {t.descricao}
+                        </td>
+                        <td>
+                          <span style={{ textTransform: 'capitalize' }}>
+                            {t.tipo.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td>
+                          {contaVinculada ? (
+                            <span className="badge badge-primary">
+                              🏦 {contaVinculada.nome}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--texto-secundario)', fontSize: '0.8rem' }}>-</span>
+                          )}
+                        </td>
+                        <td>{t.data_vencimento}</td>
+                        <td style={{ fontWeight: 600, color: t.tipo === 'receita' ? 'var(--cor-sucesso)' : 'inherit' }}>
+                          {t.tipo === 'receita' ? '+' : '-'} R$ {Number(t.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td>
+                          <span
+                            className={`badge ${
+                              t.status === 'pago'
+                                ? 'badge-success'
+                                : t.status === 'pendente'
+                                ? 'badge-warning'
+                                : 'badge-danger'
+                            }`}
+                          >
+                            {t.status.toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button
+                              type="button"
+                              onClick={() => iniciarEdicao(t)}
+                              className="btn btn-secondary"
+                              style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+                              title="Editar lançamento"
+                            >
+                              ✏️ Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => excluirTransacao(t.id)}
+                              className="btn btn-secondary"
+                              style={{ padding: '6px 10px', fontSize: '0.8rem', color: 'var(--cor-perigo)' }}
+                              title="Excluir lançamento"
+                            >
+                              🗑️ Excluir
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Controles de Paginação no rodapé */}
+            {totalPaginas > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--borda)' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)' }}>
+                  Página {paginaAtual} de {totalPaginas}
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPaginaAtual((p) => Math.max(1, p - 1))}
+                    disabled={paginaAtual === 1}
+                    className="btn btn-secondary"
+                    style={{ padding: '4px 12px', fontSize: '0.8rem' }}
+                  >
+                    ◀ Anterior
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaginaAtual((p) => Math.min(totalPaginas, p + 1))}
+                    disabled={paginaAtual >= totalPaginas}
+                    className="btn btn-secondary"
+                    style={{ padding: '4px 12px', fontSize: '0.8rem' }}
+                  >
+                    Próxima ▶
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -1471,7 +1821,7 @@ export default function FinancasPage() {
             </div>
 
             <p style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', marginBottom: '16px' }}>
-              Cofrinho: <strong>{cofrinhoOperacao.cofre.nome}</strong> (Saldo Atual: R$ {Number(cofrinhoOperacao.cofre.saldo_atual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})
+              Cofrinho: <strong>{cofrinhoOperacao.cofre.nome}</strong> (Saldo: R$ {Number(cofrinhoOperacao.cofre.saldo_atual || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})
             </p>
 
             <form onSubmit={handleAporteCofrinho} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -2059,181 +2409,6 @@ export default function FinancasPage() {
           </div>
         </div>
       )}
-
-      {/* Formulário Rápido de Lançamento Manual com Seleção de Conta */}
-      <div className="card" style={{ marginBottom: '32px' }}>
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '16px' }}>Novo Lançamento Financeiro Manual</h2>
-        <form onSubmit={handleAdicionar} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Descrição</label>
-            <input
-              type="text"
-              className="input"
-              placeholder="Ex: Conta de Luz"
-              value={descricao}
-              onChange={(e) => setDescricao(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Valor (R$)</label>
-            <input
-              type="number"
-              step="0.01"
-              className="input"
-              placeholder="0,00"
-              value={valor}
-              onChange={(e) => setValor(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Tipo</label>
-            <select
-              className="input"
-              value={tipo}
-              onChange={(e) => setTipo(e.target.value as any)}
-            >
-              <option value="despesa_variavel">Despesa Variável</option>
-              <option value="despesa_fixa">Despesa Fixa</option>
-              <option value="assinatura">Assinatura</option>
-              <option value="receita">Receita</option>
-            </select>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Conta Bancária</label>
-            <select
-              className="input"
-              value={contaIdSelecionada}
-              onChange={(e) => setContaIdSelecionada(e.target.value)}
-            >
-              <option value="">Sem vínculo</option>
-              {contas.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Vencimento</label>
-            <input
-              type="date"
-              className="input"
-              value={dataVencimento}
-              onChange={(e) => setDataVencimento(e.target.value)}
-              required
-            />
-          </div>
-
-          <button type="submit" className="btn btn-primary" style={{ height: '42px' }} disabled={salvando}>
-            {salvando ? 'Salvando...' : '+ Lançar'}
-          </button>
-        </form>
-      </div>
-
-      {/* Lista de Transações com Nome da Conta Vinculada */}
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Transações e Contas</h2>
-          {carregando && <span style={{ fontSize: '0.875rem', color: 'var(--texto-secundario)' }}>Atualizando...</span>}
-        </div>
-
-        {transacoes.length === 0 && !carregando ? (
-          <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--texto-secundario)' }}>
-            Nenhuma transação financeira registrada no banco ainda.
-          </div>
-        ) : (
-          <div className="tabela-container">
-            <table className="tabela">
-              <thead>
-                <tr>
-                  <th>Descrição</th>
-                  <th>Tipo</th>
-                  <th>Conta Bancária</th>
-                  <th>Vencimento</th>
-                  <th>Valor</th>
-                  <th>Status</th>
-                  <th style={{ textAlign: 'right' }}>Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transacoes.map((t) => {
-                  const contaVinculada = contas.find((c) => c.id === t.conta_id)
-                  const isRecorrente = Boolean(t.recorrencia_id)
-
-                  return (
-                    <tr key={t.id}>
-                      <td style={{ fontWeight: 500 }}>
-                        {isRecorrente && <span className="badge badge-warning" style={{ marginRight: '6px' }}>Recorrente</span>}
-                        {t.descricao}
-                      </td>
-                      <td>
-                        <span style={{ textTransform: 'capitalize' }}>
-                          {t.tipo.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td>
-                        {contaVinculada ? (
-                          <span className="badge badge-primary">
-                            🏦 {contaVinculada.nome}
-                          </span>
-                        ) : (
-                          <span style={{ color: 'var(--texto-secundario)', fontSize: '0.8rem' }}>-</span>
-                        )}
-                      </td>
-                      <td>{t.data_vencimento}</td>
-                      <td style={{ fontWeight: 600, color: t.tipo === 'receita' ? 'var(--cor-sucesso)' : 'inherit' }}>
-                        {t.tipo === 'receita' ? '+' : '-'} R$ {Number(t.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td>
-                        <span
-                          className={`badge ${
-                            t.status === 'pago'
-                              ? 'badge-success'
-                              : t.status === 'pendente'
-                              ? 'badge-warning'
-                              : 'badge-danger'
-                          }`}
-                        >
-                          {t.status.toUpperCase()}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                          <button
-                            type="button"
-                            onClick={() => iniciarEdicao(t)}
-                            className="btn btn-secondary"
-                            style={{ padding: '6px 10px', fontSize: '0.8rem' }}
-                            title="Editar lançamento"
-                          >
-                            ✏️ Editar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => excluirTransacao(t.id)}
-                            className="btn btn-secondary"
-                            style={{ padding: '6px 10px', fontSize: '0.8rem', color: 'var(--cor-perigo)' }}
-                            title="Excluir lançamento"
-                          >
-                            🗑️ Excluir
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
     </div>
   )
 }
