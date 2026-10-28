@@ -6,33 +6,44 @@ import { supabase } from '@/lib/supabase/client'
 interface Usuario {
   id: string
   nome: string
+  email?: string
   perfil: 'pai_admin' | 'filho_membro' | 'cuidador'
   saldo_moedas: number
   avatar_url?: string
   ativo: boolean
   cor_tema?: string
   criado_em: string
+  auth_user_id?: string
 }
 
-const EMOJIS_PADRAO = ['👦', '👧', '👨', '👩', '👶', '👵', '🧓', '🦸', '🧚', '🐱', '🐶', '⭐']
+const EMOJIS_PADRAO = ['👨', '👩', '👦', '👧', '👶', '👵', '🧓', '🦸', '🧚', '🐱', '🐶', '⭐']
 
 export default function UsuariosPage() {
   const [usuarios, setUsuarios] = useState<Usuario[]>([])
   const [carregando, setCarregando] = useState(true)
   const [filtroStatus, setFiltroStatus] = useState<'todos' | 'ativos' | 'inativos'>('todos')
 
-  // Modal de Criação / Edição
-  const [modalAberto, setModalAberto] = useState(false)
-  const [usuarioEditando, setUsuarioEditando] = useState<Usuario | null>(null)
-  const [nome, setNome] = useState('')
-  const [perfil, setPerfil] = useState<'pai_admin' | 'filho_membro' | 'cuidador'>('filho_membro')
-  const [saldoMoedas, setSaldoMoedas] = useState('0')
-  const [avatar, setAvatar] = useState('👦')
-  const [corTema, setCorTema] = useState('#4f46e5')
-  const [ativo, setAtivo] = useState(true)
-  const [salvando, setSalvando] = useState(false)
+  // Modal de Criação de Novo Usuário (com E-mail e Senha no Supabase Auth)
+  const [modalCriarAberto, setModalCriarAberto] = useState(false)
+  const [novoEmail, setNovoEmail] = useState('')
+  const [novaSenha, setNovaSenha] = useState('')
+  const [novoNome, setNovoNome] = useState('')
+  const [novoPerfil, setNovoPerfil] = useState<'pai_admin' | 'filho_membro' | 'cuidador'>('filho_membro')
+  const [novoSaldoMoedas, setNovoSaldoMoedas] = useState('0')
+  const [novoAvatar, setNovoAvatar] = useState('👦')
+  const [novoCorTema, setNovoCorTema] = useState('#4f46e5')
+  const [salvandoCriacao, setSalvandoCriacao] = useState(false)
 
-  // Modal de Ajuste de Saldo Rápido de Moedas
+  // Modal de Edição de Perfil
+  const [modalEdicaoAberto, setModalEdicaoAberto] = useState(false)
+  const [usuarioEditando, setUsuarioEditando] = useState<Usuario | null>(null)
+  const [editNome, setEditNome] = useState('')
+  const [editPerfil, setEditPerfil] = useState<'pai_admin' | 'filho_membro' | 'cuidador'>('filho_membro')
+  const [editAvatar, setEditAvatar] = useState('👦')
+  const [editCorTema, setEditCorTema] = useState('#4f46e5')
+  const [salvandoEdicao, setSalvandoEdicao] = useState(false)
+
+  // Modal de Ajuste Rápido de Moedas
   const [modalMoedasAberto, setModalMoedasAberto] = useState(false)
   const [usuarioMoedas, setUsuarioMoedas] = useState<Usuario | null>(null)
   const [quantidadeMoedas, setQuantidadeMoedas] = useState('10')
@@ -62,68 +73,92 @@ export default function UsuariosPage() {
   }, [])
 
   const abrirCriacao = () => {
-    setUsuarioEditando(null)
-    setNome('')
-    setPerfil('filho_membro')
-    setSaldoMoedas('0')
-    setAvatar('👦')
-    setCorTema('#4f46e5')
-    setAtivo(true)
-    setModalAberto(true)
+    setNovoEmail('')
+    setNovaSenha('')
+    setNovoNome('')
+    setNovoPerfil('filho_membro')
+    setNovoSaldoMoedas('0')
+    setNovoAvatar('👦')
+    setNovoCorTema('#4f46e5')
+    setModalCriarAberto(true)
+  }
+
+  const handleCriarUsuarioSupabase = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!novoEmail.trim() || !novaSenha.trim() || !novoNome.trim() || salvandoCriacao) return
+
+    setSalvandoCriacao(true)
+    try {
+      const response = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: novoEmail.trim(),
+          password: novaSenha,
+          nome: novoNome.trim(),
+          perfil: novoPerfil,
+          saldo_moedas: parseInt(novoSaldoMoedas) || 0,
+          avatar_url: novoAvatar,
+          cor_tema: novoCorTema,
+        }),
+      })
+
+      const resultado = await response.json()
+      if (!response.ok) {
+        throw new Error(resultado.error || 'Falha ao cadastrar usuário.')
+      }
+
+      await carregarUsuarios()
+      setModalCriarAberto(false)
+      alert(`Usuário "${novoNome}" criado com sucesso no Supabase Auth e vinculado ao Familia OS!`)
+    } catch (err: any) {
+      alert('Erro ao criar usuário: ' + err.message)
+    } finally {
+      setSalvandoCriacao(false)
+    }
   }
 
   const abrirEdicao = (u: Usuario) => {
     setUsuarioEditando(u)
-    setNome(u.nome)
-    setPerfil(u.perfil)
-    setSaldoMoedas(String(u.saldo_moedas || 0))
-    setAvatar(u.avatar_url || '👦')
-    setCorTema(u.cor_tema || '#4f46e5')
-    setAtivo(u.ativo !== false)
-    setModalAberto(true)
+    setEditNome(u.nome)
+    setEditPerfil(u.perfil)
+    setEditAvatar(u.avatar_url || '👤')
+    setEditCorTema(u.cor_tema || '#4f46e5')
+    setModalEdicaoAberto(true)
   }
 
-  const handleSalvar = async (e: React.FormEvent) => {
+  const handleSalvarEdicao = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!nome.trim() || salvando) return
+    if (!usuarioEditando || !editNome.trim() || salvandoEdicao) return
 
-    setSalvando(true)
+    setSalvandoEdicao(true)
     try {
-      const payload: any = {
-        nome: nome.trim(),
-        perfil,
-        saldo_moedas: parseInt(saldoMoedas) || 0,
-        avatar_url: avatar || '👦',
-        cor_tema: corTema,
-        ativo,
-      }
+      const { error } = await supabase
+        .from('usuarios')
+        .update({
+          nome: editNome.trim(),
+          perfil: editPerfil,
+          avatar_url: editAvatar,
+          cor_tema: editCorTema,
+        })
+        .eq('id', usuarioEditando.id)
 
-      if (usuarioEditando) {
-        const { error } = await supabase
-          .from('usuarios')
-          .update(payload)
-          .eq('id', usuarioEditando.id)
-
-        if (error) throw error
-      } else {
-        const { error } = await supabase.from('usuarios').insert([payload])
-        if (error) throw error
-      }
+      if (error) throw error
 
       await carregarUsuarios()
-      setModalAberto(false)
-      alert(`Membro ${usuarioEditando ? 'atualizado' : 'cadastrado'} com sucesso!`)
+      setModalEdicaoAberto(false)
+      alert('Perfil atualizado com sucesso!')
     } catch (err: any) {
-      alert('Erro ao salvar usuário: ' + err.message)
+      alert('Erro ao salvar alterações: ' + err.message)
     } finally {
-      setSalvando(false)
+      setSalvandoEdicao(false)
     }
   }
 
   const toggleAtivo = async (u: Usuario) => {
     const novoStatus = !u.ativo
     const acao = novoStatus ? 'ativar' : 'inativar'
-    if (!confirm(`Deseja realmente ${acao} o membro "${u.nome}"?`)) return
+    if (!confirm(`Deseja realmente ${acao} o acesso de "${u.nome}"?`)) return
 
     try {
       const { error } = await supabase
@@ -140,7 +175,7 @@ export default function UsuariosPage() {
   }
 
   const excluirUsuario = async (id: string, nome: string) => {
-    if (!confirm(`Tem certeza que deseja excluir o perfil de "${nome}"?`)) return
+    if (!confirm(`Tem certeza que deseja remover o usuário "${nome}"?`)) return
 
     try {
       const { error } = await supabase.from('usuarios').delete().eq('id', id)
@@ -182,7 +217,7 @@ export default function UsuariosPage() {
 
       await carregarUsuarios()
       setModalMoedasAberto(false)
-      alert(`Saldo de ${usuarioMoedas.nome} atualizado para ${novoSaldo} moedas!`)
+      alert(`Saldo de ${usuarioMoedas.nome} atualizado para ⭐ ${novoSaldo} moedas!`)
     } catch (err: any) {
       alert('Erro ao atualizar moedas: ' + err.message)
     } finally {
@@ -215,16 +250,19 @@ export default function UsuariosPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, letterSpacing: '-0.025em' }}>
-            Membros da Família & Perfis
+            Usuários & Membros da Família
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Gerencie os perfis dos membros da casa, controle de moedas e ativação/inativação de usuários.
+            Todos os usuários sincronizados com o Supabase Auth com e-mail, permissões e status.
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
+          <button type="button" onClick={carregarUsuarios} className="btn btn-secondary">
+            🔄 Atualizar Lista
+          </button>
           <button type="button" onClick={abrirCriacao} className="btn btn-primary">
-            👤 + Novo Membro da Família
+            👤 + Criar Usuário (Supabase Auth)
           </button>
         </div>
       </div>
@@ -260,14 +298,14 @@ export default function UsuariosPage() {
       {/* Grid de Membros */}
       {carregando ? (
         <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--texto-secundario)' }}>
-          Carregando membros da família...
+          Carregando usuários do Supabase...
         </div>
       ) : usuariosFiltrados.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '40px', color: 'var(--texto-secundario)' }}>
-          Nenhum membro encontrado. Clique em "👤 + Novo Membro da Família" para cadastrar filhos, pais e cuidadores.
+          Nenhum usuário encontrado. Clique em "👤 + Criar Usuário (Supabase Auth)" para cadastrar.
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
           {usuariosFiltrados.map((u) => {
             const isAtivo = u.ativo !== false
             return (
@@ -312,6 +350,12 @@ export default function UsuariosPage() {
                     </span>
                   </div>
 
+                  {/* E-mail Vinculado ao Supabase Auth */}
+                  <div style={{ marginBottom: '12px', fontSize: '0.825rem', color: 'var(--texto-secundario)', wordBreak: 'break-all' }}>
+                    <span style={{ marginRight: '6px' }}>✉️</span>
+                    <strong>{u.email || 'Sem e-mail'}</strong>
+                  </div>
+
                   {/* Saldo de Moedas do Membro */}
                   <div
                     style={{
@@ -321,11 +365,10 @@ export default function UsuariosPage() {
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
-                      marginTop: '12px',
                     }}
                   >
                     <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>Cofrinho de Moedas</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>Saldo de Moedas</div>
                       <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f59e0b' }}>
                         ⭐ {u.saldo_moedas || 0} <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>moedas</span>
                       </div>
@@ -380,8 +423,154 @@ export default function UsuariosPage() {
         </div>
       )}
 
-      {/* Modal de Criação / Edição de Membro */}
-      {modalAberto && (
+      {/* Modal de Criação de Novo Usuário no Supabase Auth */}
+      {modalCriarAberto && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '16px',
+          }}
+        >
+          <div className="card" style={{ width: '100%', maxWidth: '520px', backgroundColor: 'var(--bg-card)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>👤 Novo Usuário no Supabase</h2>
+                <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+                  Cria credencial oficial de login no Supabase Auth e perfil no Familia OS.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalCriarAberto(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCriarUsuarioSupabase} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">E-mail de Acesso</label>
+                  <input
+                    type="email"
+                    className="input"
+                    placeholder="exemplo@familia.com"
+                    value={novoEmail}
+                    onChange={(e) => setNovoEmail(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Senha Inicial</label>
+                  <input
+                    type="password"
+                    minLength={6}
+                    className="input"
+                    placeholder="Mínimo 6 dígitos"
+                    value={novaSenha}
+                    onChange={(e) => setNovaSenha(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Nome Completo</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Ex: Gabriel Martel"
+                    value={novoNome}
+                    onChange={(e) => setNovoNome(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Papel / Perfil</label>
+                  <select
+                    className="input"
+                    value={novoPerfil}
+                    onChange={(e) => setNovoPerfil(e.target.value as any)}
+                  >
+                    <option value="filho_membro">Filho(a) / Criança</option>
+                    <option value="pai_admin">Pai / Mãe (Admin)</option>
+                    <option value="cuidador">Cuidador / Apoio</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Escolha um Emoji / Avatar</label>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
+                  {EMOJIS_PADRAO.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setNovoAvatar(emoji)}
+                      style={{
+                        fontSize: '1.4rem',
+                        padding: '6px 10px',
+                        borderRadius: 'var(--raio-md)',
+                        border: novoAvatar === emoji ? '2px solid var(--cor-primaria)' : '1px solid var(--borda)',
+                        backgroundColor: novoAvatar === emoji ? 'var(--cor-primaria-suave)' : 'transparent',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Saldo Inicial de Moedas</label>
+                  <input
+                    type="number"
+                    min="0"
+                    className="input"
+                    value={novoSaldoMoedas}
+                    onChange={(e) => setNovoSaldoMoedas(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Cor de Destaque</label>
+                  <input
+                    type="color"
+                    className="input"
+                    value={novoCorTema}
+                    onChange={(e) => setNovoCorTema(e.target.value)}
+                    style={{ height: '42px', padding: '2px' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
+                <button type="button" onClick={() => setModalCriarAberto(false)} className="btn btn-secondary">
+                  Cancelar
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={salvandoCriacao}>
+                  {salvandoCriacao ? 'Criando no Supabase...' : 'Confirmar e Cadastrar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Edição de Perfil */}
+      {modalEdicaoAberto && usuarioEditando && (
         <div
           style={{
             position: 'fixed',
@@ -396,27 +585,24 @@ export default function UsuariosPage() {
         >
           <div className="card" style={{ width: '100%', maxWidth: '480px', backgroundColor: 'var(--bg-card)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>
-                {usuarioEditando ? '✏️ Editar Membro da Família' : '👤 Novo Membro da Família'}
-              </h2>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>✏️ Editar Perfil de {usuarioEditando.nome}</h2>
               <button
                 type="button"
-                onClick={() => setModalAberto(false)}
+                onClick={() => setModalEdicaoAberto(false)}
                 style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleSalvar} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <form onSubmit={handleSalvarEdicao} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Nome do Membro</label>
+                <label className="form-label">Nome Completo</label>
                 <input
                   type="text"
                   className="input"
-                  placeholder="Ex: Gabriel, Sofia, Lucas"
-                  value={nome}
-                  onChange={(e) => setNome(e.target.value)}
+                  value={editNome}
+                  onChange={(e) => setEditNome(e.target.value)}
                   required
                 />
               </div>
@@ -426,8 +612,8 @@ export default function UsuariosPage() {
                   <label className="form-label">Papel / Perfil</label>
                   <select
                     className="input"
-                    value={perfil}
-                    onChange={(e) => setPerfil(e.target.value as any)}
+                    value={editPerfil}
+                    onChange={(e) => setEditPerfil(e.target.value as any)}
                   >
                     <option value="filho_membro">Filho(a) / Criança</option>
                     <option value="pai_admin">Pai / Mãe (Admin)</option>
@@ -436,31 +622,31 @@ export default function UsuariosPage() {
                 </div>
 
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Saldo de Moedas Inicial</label>
+                  <label className="form-label">Cor de Destaque</label>
                   <input
-                    type="number"
-                    min="0"
+                    type="color"
                     className="input"
-                    value={saldoMoedas}
-                    onChange={(e) => setSaldoMoedas(e.target.value)}
+                    value={editCorTema}
+                    onChange={(e) => setEditCorTema(e.target.value)}
+                    style={{ height: '42px', padding: '2px' }}
                   />
                 </div>
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Escolha um Emoji / Avatar</label>
+                <label className="form-label">Avatar / Emoji</label>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
                   {EMOJIS_PADRAO.map((emoji) => (
                     <button
                       key={emoji}
                       type="button"
-                      onClick={() => setAvatar(emoji)}
+                      onClick={() => setEditAvatar(emoji)}
                       style={{
                         fontSize: '1.4rem',
                         padding: '6px 10px',
                         borderRadius: 'var(--raio-md)',
-                        border: avatar === emoji ? '2px solid var(--cor-primaria)' : '1px solid var(--borda)',
-                        backgroundColor: avatar === emoji ? 'var(--cor-primaria-suave)' : 'transparent',
+                        border: editAvatar === emoji ? '2px solid var(--cor-primaria)' : '1px solid var(--borda)',
+                        backgroundColor: editAvatar === emoji ? 'var(--cor-primaria-suave)' : 'transparent',
                         cursor: 'pointer',
                       }}
                     >
@@ -470,37 +656,12 @@ export default function UsuariosPage() {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Cor de Destaque</label>
-                  <input
-                    type="color"
-                    className="input"
-                    value={corTema}
-                    onChange={(e) => setCorTema(e.target.value)}
-                    style={{ height: '42px', padding: '2px' }}
-                  />
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Status do Membro</label>
-                  <select
-                    className="input"
-                    value={ativo ? 'true' : 'false'}
-                    onChange={(e) => setAtivo(e.target.value === 'true')}
-                  >
-                    <option value="true">Ativo</option>
-                    <option value="false">Inativo</option>
-                  </select>
-                </div>
-              </div>
-
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
-                <button type="button" onClick={() => setModalAberto(false)} className="btn btn-secondary">
+                <button type="button" onClick={() => setModalEdicaoAberto(false)} className="btn btn-secondary">
                   Cancelar
                 </button>
-                <button type="submit" className="btn btn-primary" disabled={salvando}>
-                  {salvando ? 'Salvando...' : usuarioEditando ? 'Salvar Alterações' : 'Cadastrar Membro'}
+                <button type="submit" className="btn btn-primary" disabled={salvandoEdicao}>
+                  {salvandoEdicao ? 'Salvando...' : 'Salvar Alterações'}
                 </button>
               </div>
             </form>
