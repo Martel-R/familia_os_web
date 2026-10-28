@@ -16,6 +16,7 @@ const ITENS_MENU: ItemNavegacao[] = [
   { rotulo: 'Rotinas & Gamificação', caminho: '/rotinas', icone: '⭐' },
   { rotulo: 'Membros da Família', caminho: '/usuarios', icone: '👥' },
   { rotulo: 'Eventos', caminho: '/eventos', icone: '🎉' },
+  { rotulo: 'Contatos & Apoio', caminho: '/contatos', icone: '📞' },
   { rotulo: 'Saúde & Bem-Estar', caminho: '/saude', icone: '🩺' },
   { rotulo: 'Inventário & Casa', caminho: '/inventario', icone: '📦' },
   { rotulo: 'Cofre de Senhas', caminho: '/cofre', icone: '🔐' },
