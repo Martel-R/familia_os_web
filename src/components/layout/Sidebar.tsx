@@ -20,6 +20,9 @@ const ITENS_MENU: ItemNavegacao[] = [
   { rotulo: 'Saúde & Bem-Estar', caminho: '/saude', icone: '🩺' },
   { rotulo: 'Inventário & Casa', caminho: '/inventario', icone: '📦' },
   { rotulo: 'Cofre de Senhas', caminho: '/cofre', icone: '🔐' },
+  { rotulo: 'Mural de Conquistas', caminho: '/mural', icone: '🖼️' },
+  { rotulo: 'Compras & Recibos', caminho: '/compras', icone: '🛒' },
+  { rotulo: 'Automação (IoT)', caminho: '/automacao', icone: '📹' },
 ]
 
 export function Sidebar() {
