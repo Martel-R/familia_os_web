@@ -251,7 +251,11 @@ export default function SaudePage() {
     try {
       setCarregando(true)
 
-      const { data: usuariosData } = await supabase.from('usuarios').select('id, nome, avatar_url').order('nome')
+      const { data: usuariosData } = await supabase
+        .from('usuarios')
+        .select('id, nome, avatar_url, ativo')
+        .eq('ativo', true)
+        .order('nome')
       if (usuariosData) {
         setUsuarios(usuariosData)
         if (usuariosData.length > 0) {

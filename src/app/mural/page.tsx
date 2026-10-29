@@ -35,7 +35,11 @@ export default function MuralPage() {
   const carregarDados = async () => {
     try {
       setCarregando(true)
-      const { data: usuariosData } = await supabase.from('usuarios').select('id, nome, avatar_url').order('nome')
+      const { data: usuariosData } = await supabase
+        .from('usuarios')
+        .select('id, nome, avatar_url, ativo')
+        .eq('ativo', true)
+        .order('nome')
       if (usuariosData) setUsuarios(usuariosData)
 
       const { data: conquistasData } = await supabase.from('mural_conquistas').select('*').order('data_conquista', { ascending: false })

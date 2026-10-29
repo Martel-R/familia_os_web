@@ -231,7 +231,8 @@ export default function EventosPage() {
       // Membros da família para atribuição de tarefas
       const { data: usuariosData } = await supabase
         .from('usuarios')
-        .select('id, nome, avatar_url')
+        .select('id, nome, avatar_url, ativo')
+        .eq('ativo', true)
         .order('nome', { ascending: true })
 
       if (usuariosData) setUsuarios(usuariosData)

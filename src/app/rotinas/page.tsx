@@ -155,6 +155,7 @@ export default function RotinasPage() {
       const { data: usuariosData } = await supabase
         .from('usuarios')
         .select('*')
+        .eq('ativo', true)
         .order('nome', { ascending: true })
 
       let logadoId = ''
