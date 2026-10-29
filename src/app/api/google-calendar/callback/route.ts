@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getGoogleOAuthCredentials } from '@/lib/google-calendar'
+import { getGoogleOAuthCredentials, getPublicOrigin } from '@/lib/google-calendar'
 import { supabase } from '@/lib/supabase/client'
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code')
   const errorParam = req.nextUrl.searchParams.get('error')
 
-  const origin = req.nextUrl.origin
+  const origin = getPublicOrigin(req)
   const redirectPage = `${origin}/eventos`
 
   if (errorParam || !code) {

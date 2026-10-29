@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connection } from 'next/server'
-import { getGoogleOAuthCredentials, gerarAuthUrlGoogle } from '@/lib/google-calendar'
+import { getGoogleOAuthCredentials, gerarAuthUrlGoogle, getPublicOrigin } from '@/lib/google-calendar'
 
 export async function GET(req: NextRequest) {
   await connection()
-  const { clientId, clientSecret, redirectUri } = getGoogleOAuthCredentials()
+  const { clientId, clientSecret } = getGoogleOAuthCredentials()
 
   if (!clientId || !clientSecret) {
     return NextResponse.json({
@@ -13,8 +13,7 @@ export async function GET(req: NextRequest) {
     })
   }
 
-  // Permite passar redirect_uri dinâmico baseado na origem da requisição
-  const origin = req.headers.get('origin') || req.nextUrl.origin
+  const origin = getPublicOrigin(req)
   const redirectUriDynamic = `${origin}/api/google-calendar/callback`
 
   const url = gerarAuthUrlGoogle(redirectUriDynamic)

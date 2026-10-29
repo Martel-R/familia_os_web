@@ -159,7 +159,8 @@ export default function EventosPage() {
 
   const conectarGoogle = async () => {
     try {
-      const res = await fetch('/api/google-calendar/auth-url')
+      const originParam = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : ''
+      const res = await fetch(`/api/google-calendar/auth-url?origin=${originParam}`)
       const data = await res.json()
       if (!data.configured) {
         alert(
@@ -168,7 +169,7 @@ export default function EventosPage() {
           '2. Ative a "Google Calendar API"\n' +
           '3. Em "Credenciais", crie um "ID do cliente OAuth 2.0" (aplicativo da Web)\n' +
           '4. Adicione o seguinte URI de redirecionamento autorizado:\n' +
-          (data.redirectUri || 'http://localhost:3000/api/google-calendar/callback') + '\n\n' +
+          (data.redirectUri || 'https://familia.martel.page/api/google-calendar/callback') + '\n\n' +
           '5. Defina as variáveis no arquivo .env.local:\nGOOGLE_CLIENT_ID=seu_client_id\nGOOGLE_CLIENT_SECRET=seu_client_secret'
         )
         return

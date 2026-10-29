@@ -1,9 +1,10 @@
 import { supabase } from '@/lib/supabase/client'
+import { NextRequest } from 'next/server'
 
 export function getGoogleOAuthCredentials() {
   const clientId = process.env.GOOGLE_CLIENT_ID || ''
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://familia.martel.page'
   const redirectUri = `${appUrl}/api/google-calendar/callback`
 
   return {
@@ -11,6 +12,29 @@ export function getGoogleOAuthCredentials() {
     clientSecret,
     redirectUri,
   }
+}
+
+export function getPublicOrigin(req: NextRequest): string {
+  // 1. Query param origin explicitamente enviado pelo navegador (window.location.origin)
+  const paramOrigin = req.nextUrl.searchParams.get('origin')
+  if (paramOrigin && paramOrigin.startsWith('http')) {
+    return paramOrigin.replace(/\/$/, '')
+  }
+
+  // 2. Variável de ambiente de produção
+  if (process.env.NEXT_PUBLIC_APP_URL && !process.env.NEXT_PUBLIC_APP_URL.includes('localhost')) {
+    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')
+  }
+
+  // 3. Headers de proxy reverso (Cloudflare Tunnel / Nginx)
+  const forwardedHost = req.headers.get('x-forwarded-host') || req.headers.get('host')
+  const forwardedProto = req.headers.get('x-forwarded-proto') || (forwardedHost?.includes('localhost') ? 'http' : 'https')
+
+  if (forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`.replace(/\/$/, '')
+  }
+
+  return req.nextUrl.origin.replace(/\/$/, '')
 }
 
 export function gerarAuthUrlGoogle(redirectUriOverride?: string): string {
