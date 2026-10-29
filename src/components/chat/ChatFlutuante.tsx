@@ -103,7 +103,7 @@ export function ChatFlutuante() {
               <div className={styles.avatarBot}>🤖</div>
               <div>
                 <div className={styles.titulo}>Assistente Familia OS</div>
-                <div className={styles.subtitulo}>Gemini 2.5 Flash • Text-to-SQL</div>
+                <div className={styles.subtitulo}>Gemini 4 Argon • Text-to-SQL</div>
               </div>
             </div>
             <button

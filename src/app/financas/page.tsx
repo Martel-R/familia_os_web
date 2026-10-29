@@ -1913,7 +1913,7 @@ export default function FinancasPage() {
               <div>
                 <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>💳 Importar Extrato Bancário ou Fatura</h2>
                 <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
-                  Conciliação automática de débitos de empréstimos e compras individuais via Gemini 2.5 Flash.
+                  Conciliação automática de débitos de empréstimos e compras individuais via Gemini 4 Argon.
                 </p>
               </div>
               <button
@@ -1948,7 +1948,7 @@ export default function FinancasPage() {
                 style={{ width: '100%', marginBottom: '16px' }}
                 disabled={analisandoDoc}
               >
-                {analisandoDoc ? 'Extraindo lançamentos e conciliando empréstimos com Gemini 2.5 Flash... 🧠' : '✨ Extrair e Conciliar com IA'}
+                {analisandoDoc ? 'Extraindo lançamentos e conciliando empréstimos com Gemini 4 Argon... 🧠' : '✨ Extrair e Conciliar com IA'}
               </button>
             )}
 
