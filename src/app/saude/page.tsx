@@ -19,6 +19,9 @@ interface FichaMedica {
   carteirinha_plano_url?: string
   numero_plano_odontologico?: string
   carteirinha_odonto_url?: string
+  resumo_clinico_ia?: string
+  orientacoes_medico_ia?: string
+  atualizado_ia_em?: string
 }
 
 interface Medicamento {
@@ -166,6 +169,7 @@ export default function SaudePage() {
   const [editCarteirinhaOdontoUrl, setEditCarteirinhaOdontoUrl] = useState('')
   const [editArquivoCarteirinhaOdonto, setEditArquivoCarteirinhaOdonto] = useState<File | null>(null)
   const [salvandoEdicaoFicha, setSalvandoEdicaoFicha] = useState(false)
+  const [avaliandoClinicaId, setAvaliandoClinicaId] = useState<string | null>(null)
 
   // Estado para Detalhes de Consulta / Exame ao Clicar
   const [consultaDetalhes, setConsultaDetalhes] = useState<ConsultaExame | null>(null)
@@ -642,6 +646,73 @@ export default function SaudePage() {
     }
   }
 
+  // --- AVALIAÇÃO CLÍNICA COM IA & GUIA PARA A CONSULTA MÉDICA ---
+  const dispararAvaliacaoClinicaIA = async (membroId: string) => {
+    const membro = usuarios.find((u) => u.id === membroId)
+    if (!membro) return
+
+    setAvaliandoClinicaId(membroId)
+    try {
+      const fichaMembro = fichas.find((f) => f.usuario_id === membroId)
+      const examesMembro = consultas
+        .filter((c) => c.usuario_id === membroId && c.tipo === 'exame')
+        .slice(-10)
+        .map((c) => ({ titulo: c.titulo, data: c.data_agendada, obs: c.observacoes }))
+
+      const metricasMembro = metricas
+        .filter((m) => m.usuario_id === membroId)
+        .slice(-15)
+        .map((m) => ({
+          tipo: m.tipo_metrica,
+          valor: `${m.valor_principal}${m.valor_secundario ? 'x' + m.valor_secundario : ''} ${m.unidade}`,
+          data: m.data_medicao,
+          obs: m.observacao,
+        }))
+
+      const remediosAtivos = medicamentos
+        .filter((med) => med.usuario_id === membroId)
+        .map((med) => `${med.nome_remedio} (${med.dosagem}) às ${med.horario}`)
+
+      const body = {
+        usuario_id: membroId,
+        nome_usuario: membro.nome,
+        tipo_sanguineo: fichaMembro?.tipo_sanguineo || null,
+        alergias: fichaMembro?.alergias || null,
+        medicamentos_continuos: fichaMembro?.medicamentos_uso_continuo || null,
+        remedios_ativos: remediosAtivos,
+        historico_exames: examesMembro,
+        metricas_recentes: metricasMembro,
+      }
+
+      const res = await fetch('/api/health/clinical-assessment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro na avaliação clínica com IA.')
+
+      // Atualiza a ficha médica no Supabase com o parecer clínico e guia da consulta
+      await supabase
+        .from('saude_fichas_medicas')
+        .update({
+          resumo_clinico_ia: data.resumo_clinico,
+          orientacoes_medico_ia: data.orientacoes_medico,
+          atualizado_ia_em: new Date().toISOString(),
+        })
+        .eq('usuario_id', membroId)
+
+      await carregarDados()
+      alert(`🧠 Parecer Clínico da IA Atualizado com Sucesso para ${membro.nome}!\n\nAs conclusões e o guia de perguntas para a próxima consulta já estão disponíveis na ficha médica.`)
+    } catch (err: any) {
+      console.error('Erro na avaliação clínica com IA:', err)
+      alert('Erro ao gerar parecer clínico com IA: ' + err.message)
+    } finally {
+      setAvaliandoClinicaId(null)
+    }
+  }
+
   // --- OCR / IA: EXTRAÇÃO AUTOMÁTICA DE EXAME MÉDICO ---
   const handleUploadExameIa = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -859,8 +930,14 @@ export default function SaudePage() {
       setModalIaAberto(false)
       setLaudoExtraido(null)
       alert(
-        `🎉 Sucesso! ${examesParaSalvar.length} exames e ${totalMetricasInseridas} medições laboratoriais foram registrados no prontuário da família!`
+        `🎉 Sucesso! ${examesParaSalvar.length} exames e ${totalMetricasInseridas} medições laboratoriais foram registrados no prontuário da família!\n\nA IA está consolidando agora a avaliação clínica para a sua próxima consulta.`
       )
+
+      // Dispara automaticamente a avaliação clínica preventiva com IA para este membro
+      const membroAlvo = iaMembroId
+      setTimeout(() => {
+        dispararAvaliacaoClinicaIA(membroAlvo)
+      }, 600)
     } catch (err: any) {
       alert('Erro ao salvar exames: ' + err.message)
     } finally {
@@ -1112,6 +1189,58 @@ export default function SaudePage() {
                           <div>🦷 <strong>Plano Odontológico:</strong> {f.numero_plano_odontologico}</div>
                         )}
                       </div>
+
+                      {/* PARECER CLÍNICO DA IA & GUIA PARA A CONSULTA MÉDICA */}
+                      <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--borda)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--cor-primaria)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            🧠 Parecer Clínico da IA & Guia da Consulta
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => dispararAvaliacaoClinicaIA(f.usuario_id)}
+                            disabled={avaliandoClinicaId === f.usuario_id}
+                            className="btn btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: '0.75rem' }}
+                            title="Reavaliar histórico de exames, medicamentos e métricas com o Gemini"
+                          >
+                            {avaliandoClinicaId === f.usuario_id ? 'Analisando...' : '🔄 Reavaliar com IA'}
+                          </button>
+                        </div>
+
+                        {f.resumo_clinico_ia || f.orientacoes_medico_ia ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.825rem' }}>
+                            {f.resumo_clinico_ia && (
+                              <div style={{ backgroundColor: 'var(--bg-hover)', padding: '10px', borderRadius: 'var(--raio-sm)' }}>
+                                <span style={{ fontWeight: 700, color: 'var(--texto-principal)' }}>🩺 Resumo Clínico & Hipóteses:</span>
+                                <div style={{ whiteSpace: 'pre-wrap', marginTop: '4px', lineHeight: '1.5' }}>{f.resumo_clinico_ia}</div>
+                              </div>
+                            )}
+                            {f.orientacoes_medico_ia && (
+                              <div style={{ backgroundColor: 'var(--cor-primaria-suave)', padding: '10px', borderRadius: 'var(--raio-sm)', border: '1px solid var(--cor-primaria)' }}>
+                                <span style={{ fontWeight: 700, color: 'var(--cor-primaria)' }}>💬 O que conversar com o Médico na Consulta (Seu Norte):</span>
+                                <div style={{ whiteSpace: 'pre-wrap', marginTop: '4px', lineHeight: '1.5' }}>{f.orientacoes_medico_ia}</div>
+                              </div>
+                            )}
+                            {f.atualizado_ia_em && (
+                              <div style={{ fontSize: '0.7rem', color: 'var(--texto-secundario)', textAlign: 'right' }}>
+                                Avaliado em: {new Date(f.atualizado_ia_em).toLocaleString('pt-BR')}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)' }}>
+                            Nenhum parecer clínico gerado ainda.{' '}
+                            <button
+                              type="button"
+                              onClick={() => dispararAvaliacaoClinicaIA(f.usuario_id)}
+                              style={{ background: 'none', border: 'none', color: 'var(--cor-primaria)', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                            >
+                              Clique aqui para gerar a avaliação clínica com IA
+                            </button>.
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -1349,13 +1478,14 @@ export default function SaudePage() {
                 <table className="tabela">
                   <thead>
                     <tr>
-                      <th>Status</th>
+                      <th title="Marque a caixa para indicar que a consulta ou exame já foi realizado. Se desmarcado, significa agendado/pendente.">Realizado / Concluído</th>
                       <th>Membro</th>
                       <th>Tipo</th>
                       <th>Especialidade / Título</th>
                       <th>Médico / Clínica</th>
                       <th>Data e Hora</th>
                       <th>Retorno</th>
+                      <th>Observações / Laudo</th>
                       <th>Laudo / Arquivo</th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
@@ -1371,6 +1501,7 @@ export default function SaudePage() {
                               checked={c.concluido}
                               onChange={() => toggleConcluidoConsulta(c)}
                               style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-sucesso)' }}
+                              title={c.concluido ? 'Marcado como Realizado / Concluído' : 'Pendente / Agendado'}
                             />
                           </td>
                           <td style={{ fontWeight: 600 }}>{u?.nome || 'Membro'}</td>
@@ -1383,6 +1514,21 @@ export default function SaudePage() {
                           <td>{c.especialista_ou_clinica || '-'}</td>
                           <td>{new Date(c.data_agendada).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td>
                           <td>{c.data_retorno ? new Date(c.data_retorno).toLocaleDateString('pt-BR') : '-'}</td>
+                          <td
+                            onClick={() => setConsultaDetalhes(c)}
+                            style={{
+                              maxWidth: '180px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              fontSize: '0.8rem',
+                              color: 'var(--texto-secundario)',
+                              cursor: 'pointer',
+                            }}
+                            title={c.observacoes || 'Sem observações'}
+                          >
+                            {c.observacoes || '-'}
+                          </td>
                           <td>
                             {c.link_anexo ? (
                               <a
