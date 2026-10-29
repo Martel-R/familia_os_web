@@ -119,6 +119,14 @@ export default function SaudePage() {
   const [novoMembroLoteId, setNovoMembroLoteId] = useState('')
   const [executandoAcaoLote, setExecutandoAcaoLote] = useState(false)
 
+  // Paginação e Ações em Lote para Métricas Vitais
+  const [paginaAtualMetricas, setPaginaAtualMetricas] = useState(1)
+  const itensPorPaginaMetricas = 10
+  const [selecionadosMetricas, setSelecionadosMetricas] = useState<{ [id: string]: boolean }>({})
+  const [modalAlterarMembroMetricasLoteAberto, setModalAlterarMembroMetricasLoteAberto] = useState(false)
+  const [novoMembroMetricasLoteId, setNovoMembroMetricasLoteId] = useState('')
+  const [executandoAcaoLoteMetricas, setExecutandoAcaoLoteMetricas] = useState(false)
+
   // Formulário Ficha
   const [fichaUsuarioId, setFichaUsuarioId] = useState('')
   const [tipoSanguineo, setTipoSanguineo] = useState('O+')
@@ -415,6 +423,52 @@ export default function SaudePage() {
       alert('Erro ao transferir membro em lote: ' + err.message)
     } finally {
       setExecutandoAcaoLote(false)
+    }
+  }
+
+  // --- AÇÕES EM LOTE PARA MÉTRICAS VITAIS ---
+  const idsMetricasSelecionados = Object.keys(selecionadosMetricas).filter((id) => selecionadosMetricas[id])
+
+  const executarAcaoLoteMetricas = async (acao: 'excluir') => {
+    if (idsMetricasSelecionados.length === 0 || executandoAcaoLoteMetricas) return
+
+    if (acao === 'excluir') {
+      if (!confirm(`Tem certeza que deseja excluir ${idsMetricasSelecionados.length} medições selecionadas?`)) {
+        return
+      }
+      setExecutandoAcaoLoteMetricas(true)
+      try {
+        const { error } = await supabase.from('saude_metricas_vitais').delete().in('id', idsMetricasSelecionados)
+        if (error) throw error
+        setMetricas((prev) => prev.filter((m) => !idsMetricasSelecionados.includes(m.id)))
+        setSelecionadosMetricas({})
+        alert(`🗑️ ${idsMetricasSelecionados.length} medições excluídas com sucesso!`)
+      } catch (err: any) {
+        alert('Erro ao excluir medições em lote: ' + err.message)
+      } finally {
+        setExecutandoAcaoLoteMetricas(false)
+      }
+    }
+  }
+
+  const executarAlterarMembroMetricasLote = async (novoMembroId: string) => {
+    if (idsMetricasSelecionados.length === 0 || !novoMembroId || executandoAcaoLoteMetricas) return
+    setExecutandoAcaoLoteMetricas(true)
+    try {
+      const { error } = await supabase
+        .from('saude_metricas_vitais')
+        .update({ usuario_id: novoMembroId })
+        .in('id', idsMetricasSelecionados)
+      if (error) throw error
+      await carregarDados()
+      setSelecionadosMetricas({})
+      setModalAlterarMembroMetricasLoteAberto(false)
+      const nomeMembro = usuarios.find((u) => u.id === novoMembroId)?.nome || 'Membro'
+      alert(`👤 ${idsMetricasSelecionados.length} medições transferidas para ${nomeMembro} com sucesso!`)
+    } catch (err: any) {
+      alert('Erro ao transferir membro em lote: ' + err.message)
+    } finally {
+      setExecutandoAcaoLoteMetricas(false)
     }
   }
 
@@ -2450,51 +2504,200 @@ export default function SaudePage() {
           </div>
 
           <div className="card">
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px' }}>Histórico de Medições Vitais</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Histórico de Medições Vitais</h3>
+              <div style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)' }}>
+                Total: <strong>{metricas.length}</strong> medições
+              </div>
+            </div>
+
+            {/* Barra de Ações em Lote para Métricas */}
+            {idsMetricasSelecionados.length > 0 && (
+              <div
+                style={{
+                  backgroundColor: 'var(--cor-primaria-suave)',
+                  border: '1px solid var(--cor-primaria)',
+                  borderRadius: 'var(--raio-md)',
+                  padding: '12px 16px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: 'var(--cor-primaria)' }}>
+                  <span>📦</span>
+                  <span>
+                    {idsMetricasSelecionados.length}{' '}
+                    {idsMetricasSelecionados.length === 1 ? 'medição selecionada' : 'medições selecionadas'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNovoMembroMetricasLoteId(usuarios.length > 0 ? usuarios[0].id : '')
+                      setModalAlterarMembroMetricasLoteAberto(true)
+                    }}
+                    className="btn btn-primary"
+                    style={{ padding: '6px 14px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    👤 Alterar Membro ({idsMetricasSelecionados.length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => executarAcaoLoteMetricas('excluir')}
+                    disabled={executandoAcaoLoteMetricas}
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '0.8rem', color: 'var(--cor-perigo)', fontWeight: 600 }}
+                  >
+                    🗑️ Excluir Selecionadas
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelecionadosMetricas({})}
+                    style={{ background: 'none', border: 'none', color: 'var(--texto-secundario)', fontSize: '0.8rem', cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    Desmarcar todas
+                  </button>
+                </div>
+              </div>
+            )}
+
             {metricas.length === 0 ? (
               <div style={{ textAlign: 'center', color: 'var(--texto-secundario)', padding: '24px' }}>
                 Nenhuma medição registrada ainda.
               </div>
             ) : (
-              <div className="tabela-container">
-                <table className="tabela">
-                  <thead>
-                    <tr>
-                      <th>Data e Hora</th>
-                      <th>Membro</th>
-                      <th>Tipo</th>
-                      <th>Medição</th>
-                      <th>Observação</th>
-                      <th style={{ textAlign: 'right' }}>Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {metricas.map((m) => {
-                      const u = usuarios.find((x) => x.id === m.usuario_id)
-                      const formatado = m.tipo_metrica === 'pressao'
-                        ? `${m.valor_principal} x ${m.valor_secundario} ${m.unidade}`
-                        : `${m.valor_principal} ${m.unidade}`
+              (() => {
+                const totalPaginasMetricas = Math.ceil(metricas.length / itensPorPaginaMetricas) || 1
+                const metricasPaginadas = metricas.slice(
+                  (paginaAtualMetricas - 1) * itensPorPaginaMetricas,
+                  paginaAtualMetricas * itensPorPaginaMetricas
+                )
 
-                      return (
-                        <tr key={m.id}>
-                          <td>{new Date(m.data_medicao).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                          <td style={{ fontWeight: 600 }}>{u?.nome || 'Membro'}</td>
-                          <td>
-                            <span className="badge badge-secondary" style={{ textTransform: 'capitalize' }}>
-                              {m.tipo_metrica}
-                            </span>
-                          </td>
-                          <td style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--cor-primaria)' }}>{formatado}</td>
-                          <td>{m.observacao || '-'}</td>
-                          <td style={{ textAlign: 'right' }}>
-                            <button type="button" onClick={() => excluirMetrica(m.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)' }}>🗑️</button>
-                          </td>
+                const todasPaginaMarcadas =
+                  metricasPaginadas.length > 0 &&
+                  metricasPaginadas.every((m) => selecionadosMetricas[m.id])
+
+                return (
+                  <div className="tabela-container" style={{ overflowX: 'auto', width: '100%', maxWidth: '100%' }}>
+                    <table className="tabela" style={{ minWidth: '700px' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '40px', textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={todasPaginaMarcadas}
+                              onChange={(e) => {
+                                const marcar = e.target.checked
+                                const novo = { ...selecionadosMetricas }
+                                metricasPaginadas.forEach((m) => {
+                                  novo[m.id] = marcar
+                                })
+                                setSelecionadosMetricas(novo)
+                              }}
+                              style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                              title="Selecionar todas desta página"
+                            />
+                          </th>
+                          <th>Data e Hora</th>
+                          <th>Membro</th>
+                          <th>Tipo</th>
+                          <th>Medição</th>
+                          <th>Observação</th>
+                          <th style={{ textAlign: 'right' }}>Ações</th>
                         </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody>
+                        {metricasPaginadas.map((m) => {
+                          const u = usuarios.find((x) => x.id === m.usuario_id)
+                          const formatado =
+                            m.tipo_metrica === 'pressao'
+                              ? `${m.valor_principal} x ${m.valor_secundario} ${m.unidade}`
+                              : `${m.valor_principal} ${m.unidade}`
+                          const estaMarcada = !!selecionadosMetricas[m.id]
+
+                          return (
+                            <tr key={m.id} style={{ backgroundColor: estaMarcada ? 'var(--cor-primaria-suave)' : undefined }}>
+                              <td style={{ textAlign: 'center' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={estaMarcada}
+                                  onChange={(e) => {
+                                    setSelecionadosMetricas({ ...selecionadosMetricas, [m.id]: e.target.checked })
+                                  }}
+                                  style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                                />
+                              </td>
+                              <td>{new Date(m.data_medicao).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                              <td style={{ fontWeight: 600 }}>{u?.nome || 'Membro'}</td>
+                              <td>
+                                <span className="badge badge-secondary" style={{ textTransform: 'capitalize' }}>
+                                  {m.tipo_metrica}
+                                </span>
+                              </td>
+                              <td style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--cor-primaria)' }}>{formatado}</td>
+                              <td>{m.observacao || '-'}</td>
+                              <td style={{ textAlign: 'right' }}>
+                                <button type="button" onClick={() => excluirMetrica(m.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)' }}>🗑️</button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+
+                    {/* Paginação */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--borda)', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)' }}>
+                        Exibindo <strong>{(paginaAtualMetricas - 1) * itensPorPaginaMetricas + 1}</strong> a{' '}
+                        <strong>{Math.min(paginaAtualMetricas * itensPorPaginaMetricas, metricas.length)}</strong> de{' '}
+                        <strong>{metricas.length}</strong> medições
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => setPaginaAtualMetricas((p) => Math.max(1, p - 1))}
+                          disabled={paginaAtualMetricas === 1}
+                          className="btn btn-secondary"
+                          style={{ padding: '5px 12px', fontSize: '0.8rem' }}
+                        >
+                          ◀ Anterior
+                        </button>
+
+                        {Array.from({ length: totalPaginasMetricas }, (_, i) => i + 1).map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            onClick={() => setPaginaAtualMetricas(num)}
+                            className={`btn ${paginaAtualMetricas === num ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ padding: '4px 10px', fontSize: '0.8rem', minWidth: '32px' }}
+                          >
+                            {num}
+                          </button>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={() => setPaginaAtualMetricas((p) => Math.min(totalPaginasMetricas, p + 1))}
+                          disabled={paginaAtualMetricas === totalPaginasMetricas || totalPaginasMetricas === 0}
+                          className="btn btn-secondary"
+                          style={{ padding: '5px 12px', fontSize: '0.8rem' }}
+                        >
+                          Próxima ▶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()
             )}
           </div>
         </div>
@@ -3523,6 +3726,59 @@ export default function SaudePage() {
                 style={{ fontWeight: 700 }}
               >
                 {executandoAcaoLote ? 'Transferindo...' : 'Confirmar Transferência'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL: ALTERAR MEMBRO EM LOTE PARA MÉTRICAS VITAIS       */}
+      {/* ======================================================== */}
+      {modalAlterarMembroMetricasLoteAberto && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10006, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '480px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>👤</span>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                  Transferir Medições em Lote
+                </h2>
+              </div>
+              <button type="button" onClick={() => setModalAlterarMembroMetricasLoteAberto(false)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', marginBottom: '16px' }}>
+              Selecione para qual membro da família você deseja atribuir as <strong>{idsMetricasSelecionados.length}</strong> medições vitais selecionadas:
+            </p>
+
+            <div className="form-group" style={{ marginBottom: '20px' }}>
+              <label className="form-label">Novo Membro Responsável</label>
+              <select
+                className="input"
+                value={novoMembroMetricasLoteId}
+                onChange={(e) => setNovoMembroMetricasLoteId(e.target.value)}
+              >
+                {usuarios.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.nome}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" onClick={() => setModalAlterarMembroMetricasLoteAberto(false)} className="btn btn-secondary">
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => executarAlterarMembroMetricasLote(novoMembroMetricasLoteId)}
+                disabled={executandoAcaoLoteMetricas || !novoMembroMetricasLoteId}
+                className="btn btn-primary"
+                style={{ fontWeight: 700 }}
+              >
+                {executandoAcaoLoteMetricas ? 'Transferindo...' : 'Confirmar Transferência'}
               </button>
             </div>
           </div>
