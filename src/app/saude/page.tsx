@@ -17,6 +17,8 @@ interface FichaMedica {
   medicamentos_uso_continuo?: string
   numero_plano_saude?: string
   carteirinha_plano_url?: string
+  numero_plano_odontologico?: string
+  carteirinha_odonto_url?: string
 }
 
 interface Medicamento {
@@ -87,6 +89,8 @@ export default function SaudePage() {
   const [alergias, setAlergias] = useState('')
   const [medicamentosContinuos, setMedicamentosContinuos] = useState('')
   const [planoSaude, setPlanoSaude] = useState('')
+  const [planoOdonto, setPlanoOdonto] = useState('')
+  const [arquivoCarteirinhaOdonto, setArquivoCarteirinhaOdonto] = useState<File | null>(null)
   const [salvandoFicha, setSalvandoFicha] = useState(false)
 
   // Formulário Medicamento
@@ -158,6 +162,9 @@ export default function SaudePage() {
   const [editPlanoSaude, setEditPlanoSaude] = useState('')
   const [editCarteirinhaUrl, setEditCarteirinhaUrl] = useState('')
   const [editArquivoCarteirinha, setEditArquivoCarteirinha] = useState<File | null>(null)
+  const [editPlanoOdonto, setEditPlanoOdonto] = useState('')
+  const [editCarteirinhaOdontoUrl, setEditCarteirinhaOdontoUrl] = useState('')
+  const [editArquivoCarteirinhaOdonto, setEditArquivoCarteirinhaOdonto] = useState<File | null>(null)
   const [salvandoEdicaoFicha, setSalvandoEdicaoFicha] = useState(false)
 
   // Estado para Detalhes de Consulta / Exame ao Clicar
@@ -269,6 +276,21 @@ export default function SaudePage() {
         }
       }
 
+      let carteirinhaOdontoUrl = null
+      if (arquivoCarteirinhaOdonto) {
+        const nomeArquivoOdonto = `carteirinhas/${Date.now()}_odonto_${arquivoCarteirinhaOdonto.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+        const { error: upErrOdonto } = await supabase.storage
+          .from('familia-os-documentos')
+          .upload(nomeArquivoOdonto, arquivoCarteirinhaOdonto, { upsert: true })
+
+        if (!upErrOdonto) {
+          const { data: pUrlOdonto } = supabase.storage
+            .from('familia-os-documentos')
+            .getPublicUrl(nomeArquivoOdonto)
+          carteirinhaOdontoUrl = pUrlOdonto.publicUrl
+        }
+      }
+
       const payload = {
         usuario_id: fichaUsuarioId,
         tipo_sanguineo: tipoSanguineo,
@@ -276,6 +298,8 @@ export default function SaudePage() {
         medicamentos_uso_continuo: medicamentosContinuos || 'Nenhum',
         numero_plano_saude: planoSaude || 'Não informado',
         carteirinha_plano_url: carteirinhaUrl,
+        numero_plano_odontologico: planoOdonto || null,
+        carteirinha_odonto_url: carteirinhaOdontoUrl,
       }
       const { error } = await supabase.from('saude_fichas_medicas').insert([payload])
       if (error) throw error
@@ -283,7 +307,9 @@ export default function SaudePage() {
       setAlergias('')
       setMedicamentosContinuos('')
       setPlanoSaude('')
+      setPlanoOdonto('')
       setArquivoCarteirinha(null)
+      setArquivoCarteirinhaOdonto(null)
       alert('Ficha médica salva com sucesso!')
     } catch (err: any) {
       alert('Erro ao salvar ficha: ' + err.message)
@@ -301,6 +327,9 @@ export default function SaudePage() {
     setEditPlanoSaude(f.numero_plano_saude || '')
     setEditCarteirinhaUrl(f.carteirinha_plano_url || '')
     setEditArquivoCarteirinha(null)
+    setEditPlanoOdonto(f.numero_plano_odontologico || '')
+    setEditCarteirinhaOdontoUrl(f.carteirinha_odonto_url || '')
+    setEditArquivoCarteirinhaOdonto(null)
   }
 
   const handleSalvarEdicaoFicha = async (e: React.FormEvent) => {
@@ -323,6 +352,21 @@ export default function SaudePage() {
         }
       }
 
+      let carteirinhaOdontoFinal = editCarteirinhaOdontoUrl
+      if (editArquivoCarteirinhaOdonto) {
+        const nomeArquivoOdonto = `carteirinhas/${Date.now()}_odonto_${editArquivoCarteirinhaOdonto.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+        const { error: upErrOdonto } = await supabase.storage
+          .from('familia-os-documentos')
+          .upload(nomeArquivoOdonto, editArquivoCarteirinhaOdonto, { upsert: true })
+
+        if (!upErrOdonto) {
+          const { data: pUrlOdonto } = supabase.storage
+            .from('familia-os-documentos')
+            .getPublicUrl(nomeArquivoOdonto)
+          carteirinhaOdontoFinal = pUrlOdonto.publicUrl
+        }
+      }
+
       const payload = {
         usuario_id: editFichaUsuarioId,
         tipo_sanguineo: editTipoSanguineo,
@@ -330,6 +374,8 @@ export default function SaudePage() {
         medicamentos_uso_continuo: editMedicamentosContinuos || 'Nenhum',
         numero_plano_saude: editPlanoSaude || 'Não informado',
         carteirinha_plano_url: carteirinhaFinal || null,
+        numero_plano_odontologico: editPlanoOdonto || null,
+        carteirinha_odonto_url: carteirinhaOdontoFinal || null,
       }
 
       const { error } = await supabase
@@ -977,13 +1023,27 @@ export default function SaudePage() {
                 <input type="text" className="input" placeholder="Ex: Unimed 123456" value={planoSaude} onChange={(e) => setPlanoSaude(e.target.value)} />
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Carteirinha (Foto/PDF)</label>
+                <label className="form-label">Carteirinha Saúde (Foto/PDF)</label>
                 <input
                   type="file"
                   accept="image/*,application/pdf"
                   className="input"
                   style={{ padding: '7px 12px' }}
                   onChange={(e) => setArquivoCarteirinha(e.target.files?.[0] || null)}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Plano Odontológico</label>
+                <input type="text" className="input" placeholder="Ex: Amil Dental 123456" value={planoOdonto} onChange={(e) => setPlanoOdonto(e.target.value)} />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Carteirinha Odonto (Foto/PDF)</label>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="input"
+                  style={{ padding: '7px 12px' }}
+                  onChange={(e) => setArquivoCarteirinhaOdonto(e.target.files?.[0] || null)}
                 />
               </div>
               <button type="submit" className="btn btn-primary" style={{ height: '42px' }} disabled={salvandoFicha}>
@@ -1006,7 +1066,7 @@ export default function SaudePage() {
                     <div key={f.id} className="card" style={{ borderLeft: '4px solid var(--cor-perigo)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                         <span style={{ fontWeight: 700, fontSize: '1.1rem' }}>{u?.nome || 'Membro'}</span>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                           <span className="badge badge-danger">Tipo: {f.tipo_sanguineo}</span>
                           {f.carteirinha_plano_url && (
                             <a
@@ -1017,7 +1077,19 @@ export default function SaudePage() {
                               style={{ padding: '3px 8px', fontSize: '0.75rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                               title="Visualizar carteirinha do plano de saúde"
                             >
-                              💳 Carteirinha
+                              💳 Saúde
+                            </a>
+                          )}
+                          {f.carteirinha_odonto_url && (
+                            <a
+                              href={f.carteirinha_odonto_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn btn-secondary"
+                              style={{ padding: '3px 8px', fontSize: '0.75rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              title="Visualizar carteirinha do plano odontológico"
+                            >
+                              🦷 Odonto
                             </a>
                           )}
                           <button
@@ -1036,6 +1108,9 @@ export default function SaudePage() {
                         <div><strong>Alergias:</strong> {f.alergias}</div>
                         <div><strong>Medicamento Contínuo:</strong> {f.medicamentos_uso_continuo}</div>
                         <div><strong>Plano de Saúde:</strong> {f.numero_plano_saude}</div>
+                        {f.numero_plano_odontologico && (
+                          <div>🦷 <strong>Plano Odontológico:</strong> {f.numero_plano_odontologico}</div>
+                        )}
                       </div>
                     </div>
                   )
@@ -1505,8 +1580,11 @@ export default function SaudePage() {
                       <div>⚠️ <strong>Alergias Críticas:</strong> {f.alergias}</div>
                       <div>💊 <strong>Uso Contínuo:</strong> {f.medicamentos_uso_continuo}</div>
                       <div>🏥 <strong>Plano de Saúde:</strong> {f.numero_plano_saude}</div>
-                      {f.carteirinha_plano_url && (
-                        <div style={{ marginTop: '8px' }}>
+                      {f.numero_plano_odontologico && (
+                        <div>🦷 <strong>Plano Odontológico:</strong> {f.numero_plano_odontologico}</div>
+                      )}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                        {f.carteirinha_plano_url && (
                           <a
                             href={f.carteirinha_plano_url}
                             target="_blank"
@@ -1514,10 +1592,21 @@ export default function SaudePage() {
                             className="btn btn-primary"
                             style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none', fontWeight: 700 }}
                           >
-                            💳 Abrir Carteirinha do Convênio ({u?.nome})
+                            💳 Carteirinha Saúde ({u?.nome})
                           </a>
-                        </div>
-                      )}
+                        )}
+                        {f.carteirinha_odonto_url && (
+                          <a
+                            href={f.carteirinha_odonto_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none', fontWeight: 700 }}
+                          >
+                            🦷 Carteirinha Odonto ({u?.nome})
+                          </a>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )
@@ -1927,7 +2016,7 @@ export default function SaudePage() {
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Nova Carteirinha (Foto/PDF)</label>
+                <label className="form-label">Nova Carteirinha Saúde (Foto/PDF)</label>
                 <input
                   type="file"
                   accept="image/*,application/pdf"
@@ -1938,7 +2027,7 @@ export default function SaudePage() {
               </div>
 
               {editCarteirinhaUrl && (
-                <div style={{ gridColumn: '1 / -1', marginTop: '4px' }}>
+                <div style={{ gridColumn: '1 / -1', marginTop: '2px' }}>
                   <a
                     href={editCarteirinhaUrl}
                     target="_blank"
@@ -1946,7 +2035,37 @@ export default function SaudePage() {
                     className="btn btn-secondary"
                     style={{ fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                   >
-                    💳 Visualizar Carteirinha Atual
+                    💳 Visualizar Carteirinha de Saúde Atual
+                  </a>
+                </div>
+              )}
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Plano Odontológico</label>
+                <input type="text" className="input" placeholder="Ex: Amil Dental 123456" value={editPlanoOdonto} onChange={(e) => setEditPlanoOdonto(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Nova Carteirinha Odonto (Foto/PDF)</label>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="input"
+                  style={{ padding: '7px 12px' }}
+                  onChange={(e) => setEditArquivoCarteirinhaOdonto(e.target.files?.[0] || null)}
+                />
+              </div>
+
+              {editCarteirinhaOdontoUrl && (
+                <div style={{ gridColumn: '1 / -1', marginTop: '2px' }}>
+                  <a
+                    href={editCarteirinhaOdontoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    🦷 Visualizar Carteirinha Odontológica Atual
                   </a>
                 </div>
               )}
