@@ -2114,7 +2114,7 @@ export default function SaudePage() {
 
                 return (
                   <div className="tabela-container" style={{ overflowX: 'auto', width: '100%', maxWidth: '100%' }}>
-                    <table className="tabela" style={{ minWidth: '850px' }}>
+                    <table className="tabela">
                       <thead>
                         <tr>
                           <th style={{ width: '40px', textAlign: 'center' }}>
@@ -2137,19 +2137,15 @@ export default function SaudePage() {
                           <th>Membro</th>
                           <th>Tipo</th>
                           <th>Especialidade / Título</th>
-                          <th>Médico / Clínica</th>
                           <th>Data e Hora</th>
                           <th>Retorno</th>
                           <th>Resultado (Exame)</th>
-                          <th>Observações / Conduta (Consulta)</th>
-                          <th>Laudo / Arquivo</th>
                           <th style={{ textAlign: 'right' }}>Ações</th>
                         </tr>
                       </thead>
                       <tbody>
                         {consultasPaginadas.map((c) => {
                           const u = usuarios.find((x) => x.id === c.usuario_id)
-                          const contato = contatosAgenda.find((x) => x.id === c.contato_id)
                           const dataValida = c.data_agendada ? new Date(c.data_agendada) : null
                           const jaPassou = dataValida ? dataValida <= new Date() : false
                           const estaMarcado = !!selecionadosConsultas[c.id]
@@ -2265,31 +2261,16 @@ export default function SaudePage() {
                                   {c.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}
                                 </span>
                               </td>
-                              <td style={{ textDecoration: c.status === 'concluido' ? 'line-through' : 'none', fontWeight: 600 }}>{c.titulo}</td>
-                              <td>
-                                <div>
-                                  <span>{c.especialista_ou_clinica || '-'}</span>
-                                  {contato?.telefone && (
-                                    <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
-                                      <a
-                                        href={`tel:${contato.telefone.replace(/\D/g, '')}`}
-                                        style={{ fontSize: '0.75rem', color: 'var(--cor-primaria)', textDecoration: 'none' }}
-                                        title={`Ligar para ${contato.telefone}`}
-                                      >
-                                        📞 {contato.telefone}
-                                      </a>
-                                      <a
-                                        href={`https://wa.me/${contato.telefone.replace(/\D/g, '')}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        style={{ fontSize: '0.75rem', color: '#16a34a', textDecoration: 'none' }}
-                                        title="Conversar no WhatsApp"
-                                      >
-                                        💬 Whats
-                                      </a>
-                                    </div>
-                                  )}
-                                </div>
+                              <td
+                                onClick={() => setConsultaDetalhes(c)}
+                                style={{
+                                  textDecoration: c.status === 'concluido' ? 'line-through' : 'none',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                                title="Clique para ver detalhes do atendimento"
+                              >
+                                {c.titulo}
                               </td>
                               <td>
                                 {dataValida ? (
@@ -2304,7 +2285,7 @@ export default function SaudePage() {
                               <td
                                 onClick={() => setConsultaDetalhes(c)}
                                 style={{
-                                  maxWidth: '180px',
+                                  maxWidth: '220px',
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
                                   whiteSpace: 'nowrap',
@@ -2318,39 +2299,6 @@ export default function SaudePage() {
                                 {c.tipo === 'exame' ? (c.resultado || '-') : '-'}
                               </td>
 
-                              {/* Coluna OBSERVAÇÕES / CONDUTA (Para Consultas ou Preparo) */}
-                              <td
-                                onClick={() => setConsultaDetalhes(c)}
-                                style={{
-                                  maxWidth: '180px',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                  fontSize: '0.8rem',
-                                  color: 'var(--texto-secundario)',
-                                  cursor: 'pointer',
-                                }}
-                                title={c.observacoes || 'Sem observações'}
-                              >
-                                {c.observacoes || '-'}
-                              </td>
-
-                              <td>
-                                {c.link_anexo ? (
-                                  <a
-                                    href={c.link_anexo}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="btn btn-secondary"
-                                    style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
-                                    title="Visualizar arquivo ou laudo original"
-                                  >
-                                    📄 Ver Laudo
-                                  </a>
-                                ) : (
-                                  <span style={{ color: 'var(--texto-secundario)', fontSize: '0.75rem' }}>-</span>
-                                )}
-                              </td>
                               <td style={{ textAlign: 'right' }}>
                                 <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
                                   {c.status === 'a_agendar' && (
