@@ -85,6 +85,19 @@ export default function EventosPage() {
   const [tarefas, setTarefas] = useState<TarefaEvento[]>([])
   const [custos, setCustos] = useState<CotacaoCusto[]>([])
 
+  // Navegação Principal da Tela
+  const [abaPrincipal, setAbaPrincipal] = useState<'calendario' | 'planejamento'>('calendario')
+
+  // Estados do Calendário Familiar
+  const [mesAtual, setMesAtual] = useState<Date>(new Date(2026, 9, 1))
+  const [hojeFormatado, setHojeFormatado] = useState<string>('2026-10-29')
+  const [visualizacaoCalendario, setVisualizacaoCalendario] = useState<'mes' | 'lista'>('mes')
+  const [consultasSaude, setConsultasSaude] = useState<any[]>([])
+  const [itemSelecionadoCalendario, setItemSelecionadoCalendario] = useState<{
+    tipo: 'evento' | 'saude'
+    dados: any
+  } | null>(null)
+
   const [abaAtiva, setAbaAtiva] = useState<'convidados' | 'tarefas' | 'custos' | 'roteiro'>('convidados')
   const [carregando, setCarregando] = useState(true)
 
@@ -208,12 +221,15 @@ export default function EventosPage() {
 
       if (usuariosData) setUsuarios(usuariosData)
 
-      // Eventos
-      const { data: eventosData } = await supabase
-        .from('eventos')
-        .select('*')
-        .order('data_evento', { ascending: true })
+      // Eventos e Consultas de Saúde
+      const [resEventos, resSaude] = await Promise.all([
+        supabase.from('eventos').select('*').order('data_evento', { ascending: true }),
+        supabase.from('saude_consultas_exames').select('*').order('data_agendada', { ascending: true }),
+      ])
 
+      if (resSaude.data) setConsultasSaude(resSaude.data)
+
+      const eventosData = resEventos.data
       if (eventosData && eventosData.length > 0) {
         setEventos(eventosData)
         const idAtivo = eventoAtivoId && eventosData.some((e) => e.id === eventoAtivoId) ? eventoAtivoId : eventosData[0].id
@@ -603,16 +619,129 @@ export default function EventosPage() {
   const totalGastoAprovado = custosAprovados.reduce((acc, c) => acc + Number(c.valor || 0), 0)
   const totalJaPago = custos.filter((c) => c.pago).reduce((acc, c) => acc + Number(c.valor || 0), 0)
 
+  // --- LÓGICA DO CALENDÁRIO FAMILIAR ---
+  const mesAnterior = () => {
+    setMesAtual(new Date(mesAtual.getFullYear(), mesAtual.getMonth() - 1, 1))
+  }
+
+  const proximoMes = () => {
+    setMesAtual(new Date(mesAtual.getFullYear(), mesAtual.getMonth() + 1, 1))
+  }
+
+  const irParaHoje = () => {
+    const agora = new Date()
+    setMesAtual(new Date(agora.getFullYear(), agora.getMonth(), 1))
+  }
+
+  const anoAtualCal = mesAtual.getFullYear()
+  const mesAtualCal = mesAtual.getMonth()
+  const primeiroDiaSemana = new Date(anoAtualCal, mesAtualCal, 1).getDay()
+  const totalDiasMes = new Date(anoAtualCal, mesAtualCal + 1, 0).getDate()
+  const totalDiasMesAnterior = new Date(anoAtualCal, mesAtualCal, 0).getDate()
+
+  interface CelulaCalendario {
+    dia: number
+    dataStr: string
+    ehMesAtual: boolean
+    ehHoje: boolean
+  }
+
+  const celulasCalendario: CelulaCalendario[] = []
+
+  // Dias do mês anterior
+  for (let i = primeiroDiaSemana - 1; i >= 0; i--) {
+    const diaNum = totalDiasMesAnterior - i
+    const mesAnt = mesAtualCal === 0 ? 12 : mesAtualCal
+    const anoAnt = mesAtualCal === 0 ? anoAtualCal - 1 : anoAtualCal
+    const dataStr = `${anoAnt}-${String(mesAnt).padStart(2, '0')}-${String(diaNum).padStart(2, '0')}`
+    celulasCalendario.push({
+      dia: diaNum,
+      dataStr,
+      ehMesAtual: false,
+      ehHoje: dataStr === hojeFormatado,
+    })
+  }
+
+  // Dias do mês corrente
+  for (let d = 1; d <= totalDiasMes; d++) {
+    const dataStr = `${anoAtualCal}-${String(mesAtualCal + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    celulasCalendario.push({
+      dia: d,
+      dataStr,
+      ehMesAtual: true,
+      ehHoje: dataStr === hojeFormatado,
+    })
+  }
+
+  // Dias do mês seguinte até múltiplo de 7
+  const sobraDias = (7 - (celulasCalendario.length % 7)) % 7
+  for (let i = 1; i <= sobraDias; i++) {
+    const mesProx = mesAtualCal === 11 ? 1 : mesAtualCal + 2
+    const anoProx = mesAtualCal === 11 ? anoAtualCal + 1 : anoAtualCal
+    const dataStr = `${anoProx}-${String(mesProx).padStart(2, '0')}-${String(i).padStart(2, '0')}`
+    celulasCalendario.push({
+      dia: i,
+      dataStr,
+      ehMesAtual: false,
+      ehHoje: dataStr === hojeFormatado,
+    })
+  }
+
+  const obterItensDoDia = (dataStr: string) => {
+    const evs = eventos.filter((ev) => {
+      const dIni = ev.data_evento.slice(0, 10)
+      if (dIni === dataStr) return true
+      if (ev.data_fim) {
+        const dFim = ev.data_fim.slice(0, 10)
+        return dataStr >= dIni && dataStr <= dFim
+      }
+      return false
+    })
+
+    const consultas = consultasSaude.filter((c) => {
+      if (!c.data_agendada) return false
+      return c.data_agendada.slice(0, 10) === dataStr
+    })
+
+    return { eventos: evs, consultas }
+  }
+
+  const clicarDia = (dataStr: string) => {
+    setEventoEditando(null)
+    setNomeEv('')
+    setTipoEv('aniversario')
+    setDataInicioEv(`${dataStr}T09:00`)
+    setDataFimEv('')
+    setLocalEv('')
+    setDestinoEv('')
+    setDescricaoEv('')
+    setOrcamentoEv('1500')
+    setModalEventoAberto(true)
+  }
+
+  // Próximos eventos para a visualização em lista
+  const todosItensFuturos = [
+    ...eventos.map((e) => ({ ...e, tipoItem: 'evento' as const })),
+    ...consultasSaude.map((c) => ({
+      ...c,
+      tipoItem: 'saude' as const,
+      nome: `${c.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}: ${c.titulo}`,
+      data_evento: c.data_agendada,
+    })),
+  ]
+    .filter((it) => it.data_evento && it.data_evento.slice(0, 10) >= hojeFormatado)
+    .sort((a, b) => new Date(a.data_evento).getTime() - new Date(b.data_evento).getTime())
+
   return (
     <div>
       {/* Topo / Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, letterSpacing: '-0.025em' }}>
-            Planejamento de Eventos, Viagens & Festas
+            Calendário & Eventos da Família
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Lista de convidados com RSVP, checklists de preparação, orçamento e integração com Google Calendar.
+            Compromissos, aniversários, viagens, consultas médicas e planejamento completo de celebrações.
           </p>
         </div>
 
@@ -648,6 +777,286 @@ export default function EventosPage() {
           </button>
         </div>
       </div>
+
+      {/* NAVEGAÇÃO PRINCIPAL: CALENDÁRIO VS PLANEJAMENTO */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '24px', borderBottom: '1px solid var(--borda)', paddingBottom: '10px' }}>
+        <button
+          type="button"
+          onClick={() => setAbaPrincipal('calendario')}
+          className={`btn ${abaPrincipal === 'calendario' ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ padding: '9px 22px', fontSize: '0.95rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          📅 Calendário da Família
+        </button>
+        <button
+          type="button"
+          onClick={() => setAbaPrincipal('planejamento')}
+          className={`btn ${abaPrincipal === 'planejamento' ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ padding: '9px 22px', fontSize: '0.95rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          📋 Planejamento de Eventos ({eventos.length})
+        </button>
+      </div>
+
+      {/* ======================================================== */}
+      {/* ABA 1: CALENDÁRIO GERAL DA FAMÍLIA                       */}
+      {/* ======================================================== */}
+      {abaPrincipal === 'calendario' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Barra de Controles do Calendário */}
+          <div className="card" style={{ padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={mesAnterior}
+                className="btn btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.9rem' }}
+                title="Mês anterior"
+              >
+                ◀
+              </button>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, minWidth: '190px', textAlign: 'center', textTransform: 'capitalize' }}>
+                {mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+              </h2>
+              <button
+                type="button"
+                onClick={proximoMes}
+                className="btn btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.9rem' }}
+                title="Próximo mês"
+              >
+                ▶
+              </button>
+              <button
+                type="button"
+                onClick={irParaHoje}
+                className="btn btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                Hoje
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setVisualizacaoCalendario('mes')}
+                className={`btn ${visualizacaoCalendario === 'mes' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '6px 14px', fontSize: '0.85rem' }}
+              >
+                📅 Grade Mensal
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisualizacaoCalendario('lista')}
+                className={`btn ${visualizacaoCalendario === 'lista' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '6px 14px', fontSize: '0.85rem' }}
+              >
+                📋 Próximos ({todosItensFuturos.length})
+              </button>
+            </div>
+          </div>
+
+          {/* Visualização: Grade Mensal */}
+          {visualizacaoCalendario === 'mes' ? (
+            <div className="card" style={{ padding: '16px', overflowX: 'auto' }}>
+              <div style={{ minWidth: '700px' }}>
+                {/* Dias da Semana */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '6px' }}>
+                  {['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'].map((ds) => (
+                    <div
+                      key={ds}
+                      style={{
+                        padding: '8px',
+                        textAlign: 'center',
+                        fontWeight: 700,
+                        fontSize: '0.8rem',
+                        color: 'var(--texto-secundario)',
+                        backgroundColor: 'var(--bg-hover)',
+                        borderRadius: 'var(--raio-sm)',
+                      }}
+                    >
+                      {ds}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Grade dos Dias */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
+                  {celulasCalendario.map((c, idx) => {
+                    const { eventos: evsDia, consultas: consDia } = obterItensDoDia(c.dataStr)
+                    const totalItens = evsDia.length + consDia.length
+
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => clicarDia(c.dataStr)}
+                        style={{
+                          minHeight: '115px',
+                          backgroundColor: c.ehMesAtual ? 'var(--bg-card)' : 'var(--bg-hover)',
+                          borderRadius: 'var(--raio-sm)',
+                          border: c.ehHoje ? '2px solid var(--cor-primaria)' : '1px solid var(--borda)',
+                          padding: '6px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px',
+                          cursor: 'pointer',
+                          opacity: c.ehMesAtual ? 1 : 0.45,
+                          transition: 'background-color 0.15s ease',
+                        }}
+                        title={`Clique para adicionar um evento em ${new Date(c.dataStr + 'T12:00:00').toLocaleDateString('pt-BR')}`}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          {c.ehHoje ? (
+                            <span style={{ fontSize: '0.65rem', fontWeight: 800, color: '#fff', backgroundColor: 'var(--cor-primaria)', padding: '1px 5px', borderRadius: '4px' }}>
+                              Hoje
+                            </span>
+                          ) : (
+                            <span />
+                          )}
+                          <span style={{ fontSize: '0.8rem', fontWeight: c.ehHoje ? 800 : 600, color: c.ehHoje ? 'var(--cor-primaria)' : 'var(--texto-principal)' }}>
+                            {c.dia}
+                          </span>
+                        </div>
+
+                        {/* Badges de Eventos do Dia */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '2px', overflowY: 'auto', maxHeight: '85px' }}>
+                          {evsDia.map((ev) => {
+                            const tipoInfo = TIPOS_EVENTO[ev.tipo] || TIPOS_EVENTO.outro
+                            return (
+                              <div
+                                key={ev.id}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setItemSelecionadoCalendario({ tipo: 'evento', dados: ev })
+                                }}
+                                style={{
+                                  fontSize: '0.7rem',
+                                  fontWeight: 600,
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  backgroundColor: 'var(--cor-primaria-suave)',
+                                  color: 'var(--cor-primaria)',
+                                  border: '1px solid var(--cor-primaria)',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                                title={`${tipoInfo.icone} ${ev.nome}`}
+                              >
+                                {tipoInfo.icone} {ev.nome}
+                              </div>
+                            )
+                          })}
+
+                          {consDia.map((con) => (
+                            <div
+                              key={con.id}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setItemSelecionadoCalendario({ tipo: 'saude', dados: con })
+                              }}
+                              style={{
+                                fontSize: '0.7rem',
+                                fontWeight: 600,
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                backgroundColor: con.tipo === 'consulta' ? '#eff6ff' : '#ecfdf5',
+                                color: con.tipo === 'consulta' ? '#1d4ed8' : '#047857',
+                                border: `1px solid ${con.tipo === 'consulta' ? '#93c5fd' : '#6ee7b7'}`,
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                              title={`${con.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}: ${con.titulo}`}
+                            >
+                              {con.tipo === 'consulta' ? '🩺' : '🧪'} {con.titulo}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Visualização: Lista de Próximos Eventos */
+            <div className="card">
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '16px' }}>
+                Próximos Compromissos & Celebrações da Família
+              </h3>
+
+              {todosItensFuturos.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--texto-secundario)' }}>
+                  Nenhum compromisso futuro agendado. Clique em "+ Novo Evento / Viagem" para agendar!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {todosItensFuturos.map((it: any) => {
+                    const ehEv = it.tipoItem === 'evento'
+                    const tipoInfo = ehEv ? (TIPOS_EVENTO[it.tipo] || TIPOS_EVENTO.outro) : null
+
+                    return (
+                      <div
+                        key={it.id}
+                        onClick={() => setItemSelecionadoCalendario({ tipo: it.tipoItem, dados: it })}
+                        style={{
+                          padding: '14px 18px',
+                          borderRadius: 'var(--raio-md)',
+                          backgroundColor: 'var(--bg-hover)',
+                          borderLeft: `4px solid ${ehEv ? 'var(--cor-primaria)' : it.tipo === 'consulta' ? '#2563eb' : '#059669'}`,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          cursor: 'pointer',
+                          gap: '14px',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <span style={{ fontSize: '1.5rem' }}>
+                            {ehEv ? tipoInfo?.icone : it.tipo === 'consulta' ? '🩺' : '🧪'}
+                          </span>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: '1rem' }}>{it.nome}</div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+                              📅 {new Date(it.data_evento).toLocaleString('pt-BR', { dateStyle: 'long', timeStyle: 'short' })}
+                              {it.local && ` • 📍 ${it.local}`}
+                              {it.especialista_ou_clinica && ` • 🏥 ${it.especialista_ou_clinica}`}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          {ehEv ? (
+                            <span className="badge badge-primary">
+                              {tipoInfo?.label}
+                            </span>
+                          ) : (
+                            <span className={`badge ${it.tipo === 'consulta' ? 'badge-primary' : 'badge-secondary'}`}>
+                              {it.tipo === 'consulta' ? 'Consulta Médica' : 'Exame'}
+                            </span>
+                          )}
+                          <span style={{ fontSize: '0.8rem', color: 'var(--cor-primaria)', fontWeight: 600 }}>
+                            Ver Detalhes →
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* ABA 2: PLANEJAMENTO COMPLETO DE EVENTOS & VIAGENS        */}
+      {/* ======================================================== */}
+      {abaPrincipal === 'planejamento' && (
+        <div>
 
       {/* Seletor de Eventos Cadastrados */}
       <div style={{ marginBottom: '28px' }}>
@@ -1240,6 +1649,109 @@ export default function EventosPage() {
             </div>
           )}
         </>
+      )}
+    </div>
+  )}
+
+      {/* Modal Detalhes Rápidos ao Clicar no Calendário */}
+      {itemSelecionadoCalendario && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10005, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '540px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '1.75rem' }}>
+                  {itemSelecionadoCalendario.tipo === 'evento'
+                    ? (TIPOS_EVENTO[itemSelecionadoCalendario.dados.tipo]?.icone || '🎉')
+                    : itemSelecionadoCalendario.dados.tipo === 'consulta' ? '🩺' : '🧪'}
+                </span>
+                <div>
+                  <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>
+                    {itemSelecionadoCalendario.dados.nome || itemSelecionadoCalendario.dados.titulo}
+                  </h3>
+                  <span className={`badge ${itemSelecionadoCalendario.tipo === 'evento' ? 'badge-primary' : 'badge-secondary'}`}>
+                    {itemSelecionadoCalendario.tipo === 'evento'
+                      ? (TIPOS_EVENTO[itemSelecionadoCalendario.dados.tipo]?.label || 'Evento')
+                      : itemSelecionadoCalendario.dados.tipo === 'consulta' ? 'Consulta Médica' : 'Exame Laboratorial'}
+                  </span>
+                </div>
+              </div>
+              <button type="button" onClick={() => setItemSelecionadoCalendario(null)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.9rem', marginBottom: '20px', backgroundColor: 'var(--bg-hover)', padding: '14px', borderRadius: 'var(--raio-md)' }}>
+              <div>
+                📅 <strong>Data:</strong>{' '}
+                {new Date(itemSelecionadoCalendario.dados.data_evento || itemSelecionadoCalendario.dados.data_agendada).toLocaleString('pt-BR', { dateStyle: 'long', timeStyle: 'short' })}
+              </div>
+              {itemSelecionadoCalendario.dados.data_fim && (
+                <div>
+                  🏁 <strong>Término:</strong>{' '}
+                  {new Date(itemSelecionadoCalendario.dados.data_fim).toLocaleString('pt-BR', { dateStyle: 'long', timeStyle: 'short' })}
+                </div>
+              )}
+              {itemSelecionadoCalendario.dados.local && (
+                <div>📍 <strong>Local:</strong> {itemSelecionadoCalendario.dados.local}</div>
+              )}
+              {itemSelecionadoCalendario.dados.destino && (
+                <div>🗺️ <strong>Destino:</strong> {itemSelecionadoCalendario.dados.destino}</div>
+              )}
+              {itemSelecionadoCalendario.dados.especialista_ou_clinica && (
+                <div>🏥 <strong>Médico / Clínica:</strong> {itemSelecionadoCalendario.dados.especialista_ou_clinica}</div>
+              )}
+              {itemSelecionadoCalendario.dados.descricao && (
+                <div>📝 <strong>Descrição:</strong> {itemSelecionadoCalendario.dados.descricao}</div>
+              )}
+              {itemSelecionadoCalendario.dados.resultado && (
+                <div>🧪 <strong>Resultado:</strong> {itemSelecionadoCalendario.dados.resultado}</div>
+              )}
+              {itemSelecionadoCalendario.dados.observacoes && (
+                <div>📋 <strong>Observações:</strong> {itemSelecionadoCalendario.dados.observacoes}</div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap' }}>
+              {itemSelecionadoCalendario.tipo === 'evento' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const evId = itemSelecionadoCalendario.dados.id
+                      setItemSelecionadoCalendario(null)
+                      setEventoAtivoId(evId)
+                      setAbaPrincipal('planejamento')
+                    }}
+                    className="btn btn-primary"
+                    style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    📋 Abrir Planejamento Completo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ev = itemSelecionadoCalendario.dados
+                      setItemSelecionadoCalendario(null)
+                      abrirEdicaoEvento(ev)
+                    }}
+                    className="btn btn-secondary"
+                  >
+                    ✏️ Editar
+                  </button>
+                </>
+              ) : (
+                <a
+                  href="/saude"
+                  className="btn btn-primary"
+                  style={{ textDecoration: 'none', fontWeight: 700 }}
+                >
+                  🩺 Abrir no Módulo de Saúde →
+                </a>
+              )}
+              <button type="button" onClick={() => setItemSelecionadoCalendario(null)} className="btn btn-secondary">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal Novo / Editar Evento */}
