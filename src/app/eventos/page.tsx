@@ -68,6 +68,14 @@ interface CotacaoCusto {
   observacoes?: string
 }
 
+interface ContatoAgenda {
+  id: string
+  nome: string
+  especialidade?: string
+  telefone: string
+  email?: string
+}
+
 const TIPOS_EVENTO: { [k: string]: { label: string; icone: string } } = {
   aniversario: { label: 'Aniversário', icone: '🎂' },
   viagem: { label: 'Viagem', icone: '✈️' },
@@ -84,6 +92,13 @@ export default function EventosPage() {
   const [convidados, setConvidados] = useState<Convidado[]>([])
   const [tarefas, setTarefas] = useState<TarefaEvento[]>([])
   const [custos, setCustos] = useState<CotacaoCusto[]>([])
+  const [contatosAgenda, setContatosAgenda] = useState<ContatoAgenda[]>([])
+
+  // Modal e Seleção em Lote de Convidados a partir da Agenda
+  const [modoConvidado, setModoConvidado] = useState<'contatos' | 'manual'>('contatos')
+  const [buscaContatoConv, setBuscaContatoConv] = useState('')
+  const [contatosSelecionados, setContatosSelecionados] = useState<{ [id: string]: boolean }>({})
+  const [salvandoContatosLote, setSalvandoContatosLote] = useState(false)
 
   // Navegação Principal da Tela
   const [abaPrincipal, setAbaPrincipal] = useState<'calendario' | 'planejamento'>('calendario')
@@ -221,13 +236,15 @@ export default function EventosPage() {
 
       if (usuariosData) setUsuarios(usuariosData)
 
-      // Eventos e Consultas de Saúde
-      const [resEventos, resSaude] = await Promise.all([
+      // Eventos, Consultas de Saúde e Agenda de Contatos
+      const [resEventos, resSaude, resContatos] = await Promise.all([
         supabase.from('eventos').select('*').order('data_evento', { ascending: true }),
         supabase.from('saude_consultas_exames').select('*').order('data_agendada', { ascending: true }),
+        supabase.from('agenda_contatos').select('id, nome, especialidade, telefone, email').order('nome', { ascending: true }),
       ])
 
       if (resSaude.data) setConsultasSaude(resSaude.data)
+      if (resContatos.data) setContatosAgenda(resContatos.data)
 
       const eventosData = resEventos.data
       if (eventosData && eventosData.length > 0) {
@@ -422,6 +439,49 @@ export default function EventosPage() {
       setConvidados(convidados.filter((c) => c.id !== id))
     } catch (err: any) {
       alert('Erro ao excluir convidado: ' + err.message)
+    }
+  }
+
+  const handleAdicionarContatosLote = async () => {
+    if (!eventoAtual || salvandoContatosLote) return
+    const ids = Object.keys(contatosSelecionados).filter((id) => contatosSelecionados[id])
+    if (ids.length === 0) return alert('Selecione ao menos um contato da lista para adicionar.')
+
+    setSalvandoContatosLote(true)
+    try {
+      const nomesJaAdicionados = new Set(convidados.map((c) => c.nome.toLowerCase().trim()))
+      const contatosParaAdicionar = contatosAgenda.filter((c) => ids.includes(c.id))
+
+      const novosPayloads = contatosParaAdicionar
+        .filter((c) => !nomesJaAdicionados.has(c.nome.toLowerCase().trim()))
+        .map((c) => ({
+          evento_id: eventoAtual.id,
+          nome: c.nome.trim(),
+          telefone: c.telefone ? c.telefone.trim() : null,
+          status: 'pendente' as const,
+          adultos: 1,
+          criancas: 0,
+        }))
+
+      if (novosPayloads.length === 0) {
+        alert('Todos os contatos selecionados já estão na lista de convidados deste evento!')
+        setModalConvidadoAberto(false)
+        return
+      }
+
+      const { data, error } = await supabase.from('convidados').insert(novosPayloads).select()
+      if (error) throw error
+
+      if (data) {
+        setConvidados([...convidados, ...data])
+        setContatosSelecionados({})
+        setModalConvidadoAberto(false)
+        alert(`🎉 ${data.length} contatos adicionados à lista de convidados com sucesso!`)
+      }
+    } catch (err: any) {
+      alert('Erro ao adicionar contatos: ' + err.message)
+    } finally {
+      setSalvandoContatosLote(false)
     }
   }
 
@@ -1252,9 +1312,29 @@ export default function EventosPage() {
                   </div>
                 </div>
 
-                <button type="button" onClick={() => setModalConvidadoAberto(true)} className="btn btn-primary">
-                  👤 + Adicionar Convidado
-                </button>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoConvidado('contatos')
+                      setModalConvidadoAberto(true)
+                    }}
+                    className="btn btn-primary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    👥 + Importar dos Contatos ({contatosAgenda.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoConvidado('manual')
+                      setModalConvidadoAberto(true)
+                    }}
+                    className="btn btn-secondary"
+                  >
+                    ✏️ Digitar Manualmente
+                  </button>
+                </div>
               </div>
 
               {convidados.length === 0 ? (
@@ -1874,97 +1954,303 @@ export default function EventosPage() {
         </div>
       )}
 
-      {/* Modal Adicionar Convidado */}
+      {/* Modal Adicionar Convidado (Contatos da Agenda ou Manual) */}
       {modalConvidadoAberto && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: '16px' }}>
-          <div className="card" style={{ width: '100%', maxWidth: '480px', backgroundColor: 'var(--bg-card)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>👤 Convidar Amigo ou Familiar</h2>
-              <button type="button" onClick={() => setModalConvidadoAberto(false)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}>✕</button>
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '580px', backgroundColor: 'var(--bg-card)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.4rem' }}>👥</span>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                  Adicionar Convidados para {eventoAtual?.nome}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalConvidadoAberto(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
+              >
+                ✕
+              </button>
             </div>
 
-            <form onSubmit={handleAdicionarConvidado} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Nome Completo</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="Ex: Tio Carlos & Família"
-                  value={convNome}
-                  onChange={(e) => setConvNome(e.target.value)}
-                  required
-                />
-              </div>
+            {/* Abas do Modal */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', borderBottom: '1px solid var(--borda)', paddingBottom: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setModoConvidado('contatos')}
+                className={`btn ${modoConvidado === 'contatos' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '6px 14px', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                📋 Importar da Agenda ({contatosAgenda.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setModoConvidado('manual')}
+                className={`btn ${modoConvidado === 'manual' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '6px 14px', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                ✏️ Digitar Manualmente
+              </button>
+            </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">WhatsApp / Telefone</label>
+            {/* MODO 1: SELECIONAR DA AGENDA DE CONTATOS */}
+            {modoConvidado === 'contatos' ? (
+              <div>
+                {/* Campo de Busca */}
+                <div style={{ marginBottom: '12px' }}>
                   <input
                     type="text"
                     className="input"
-                    placeholder="(91) 9...."
-                    value={convTelefone}
-                    onChange={(e) => setConvTelefone(e.target.value)}
+                    placeholder="🔍 Buscar contato por nome, telefone ou categoria..."
+                    value={buscaContatoConv}
+                    onChange={(e) => setBuscaContatoConv(e.target.value)}
                   />
                 </div>
 
+                {(() => {
+                  const contatosFiltrados = contatosAgenda.filter((c) => {
+                    const t = buscaContatoConv.toLowerCase().trim()
+                    if (!t) return true
+                    return (
+                      c.nome.toLowerCase().includes(t) ||
+                      (c.telefone && c.telefone.includes(t)) ||
+                      (c.especialidade && c.especialidade.toLowerCase().includes(t))
+                    )
+                  })
+
+                  const nomesJaConvidados = new Set(convidados.map((c) => c.nome.toLowerCase().trim()))
+                  const todosFiltradosMarcados =
+                    contatosFiltrados.length > 0 &&
+                    contatosFiltrados.every((c) => contatosSelecionados[c.id])
+                  const totalSelecionados = Object.values(contatosSelecionados).filter(Boolean).length
+
+                  return (
+                    <>
+                      {/* Barra de Selecionar Todos */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px 12px',
+                          backgroundColor: 'var(--bg-hover)',
+                          borderRadius: 'var(--raio-sm)',
+                          marginBottom: '12px',
+                          fontSize: '0.85rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <input
+                            type="checkbox"
+                            id="checkTodosContatos"
+                            checked={todosFiltradosMarcados}
+                            onChange={(e) => {
+                              const marcar = e.target.checked
+                              const novo = { ...contatosSelecionados }
+                              contatosFiltrados.forEach((c) => {
+                                novo[c.id] = marcar
+                              })
+                              setContatosSelecionados(novo)
+                            }}
+                            style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                          />
+                          <label htmlFor="checkTodosContatos" style={{ fontWeight: 600, cursor: 'pointer' }}>
+                            Selecionar Todos Filtrados ({contatosFiltrados.length})
+                          </label>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          {totalSelecionados > 0 && (
+                            <span style={{ fontWeight: 700, color: 'var(--cor-primaria)' }}>
+                              {totalSelecionados} selecionados
+                            </span>
+                          )}
+                          {totalSelecionados > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setContatosSelecionados({})}
+                              style={{ background: 'none', border: 'none', color: 'var(--texto-secundario)', fontSize: '0.75rem', cursor: 'pointer', textDecoration: 'underline' }}
+                            >
+                              Limpar
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Lista de Contatos */}
+                      {contatosFiltrados.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--texto-secundario)', fontSize: '0.85rem' }}>
+                          Nenhum contato encontrado na agenda com esse termo.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '320px', overflowY: 'auto', paddingRight: '4px' }}>
+                          {contatosFiltrados.map((c) => {
+                            const jaAdicionado = nomesJaConvidados.has(c.nome.toLowerCase().trim())
+                            const marcado = !!contatosSelecionados[c.id]
+
+                            return (
+                              <div
+                                key={c.id}
+                                onClick={() => {
+                                  if (!jaAdicionado) {
+                                    setContatosSelecionados({ ...contatosSelecionados, [c.id]: !marcado })
+                                  }
+                                }}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  padding: '10px 12px',
+                                  borderRadius: 'var(--raio-sm)',
+                                  backgroundColor: marcado ? 'var(--cor-primaria-suave)' : 'var(--bg-hover)',
+                                  border: marcado ? '1px solid var(--cor-primaria)' : '1px solid var(--borda)',
+                                  cursor: jaAdicionado ? 'default' : 'pointer',
+                                  opacity: jaAdicionado ? 0.6 : 1,
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={marcado}
+                                    disabled={jaAdicionado}
+                                    onChange={(e) => {
+                                      e.stopPropagation()
+                                      setContatosSelecionados({ ...contatosSelecionados, [c.id]: e.target.checked })
+                                    }}
+                                    style={{ width: '18px', height: '18px', cursor: jaAdicionado ? 'not-allowed' : 'pointer', accentColor: 'var(--cor-primaria)' }}
+                                  />
+                                  <div>
+                                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{c.nome}</div>
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', display: 'flex', gap: '8px' }}>
+                                      {c.telefone && <span>📞 {c.telefone}</span>}
+                                      {c.especialidade && <span>• {c.especialidade}</span>}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {jaAdicionado ? (
+                                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--cor-sucesso)', backgroundColor: '#ecfdf5', padding: '2px 6px', borderRadius: '4px' }}>
+                                    ✓ Já na Lista
+                                  </span>
+                                ) : (
+                                  marcado && (
+                                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--cor-primaria)' }}>
+                                      Selecionado
+                                    </span>
+                                  )
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {/* Botão de Ação */}
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
+                        <button type="button" onClick={() => setModalConvidadoAberto(false)} className="btn btn-secondary">
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleAdicionarContatosLote}
+                          disabled={totalSelecionados === 0 || salvandoContatosLote}
+                          className="btn btn-primary"
+                          style={{ fontWeight: 700 }}
+                        >
+                          {salvandoContatosLote ? 'Adicionando...' : `Adicionar ${totalSelecionados} Contatos`}
+                        </button>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            ) : (
+              /* MODO 2: DIGITAR MANUALMENTE */
+              <form onSubmit={handleAdicionarConvidado} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Itens que leva</label>
+                  <label className="form-label">Nome Completo *</label>
                   <input
                     type="text"
                     className="input"
-                    placeholder="Ex: Sobremesa, Refrigerante"
-                    value={convItens}
-                    onChange={(e) => setConvItens(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Quantidade de Adultos</label>
-                  <input
-                    type="number"
-                    min="1"
-                    className="input"
-                    value={convAdultos}
-                    onChange={(e) => setConvAdultos(e.target.value)}
+                    placeholder="Ex: Tio Carlos & Família"
+                    value={convNome}
+                    onChange={(e) => setConvNome(e.target.value)}
                     required
                   />
                 </div>
 
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">WhatsApp / Telefone</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="(91) 9...."
+                      value={convTelefone}
+                      onChange={(e) => setConvTelefone(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Itens que leva</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Ex: Sobremesa, Refrigerante"
+                      value={convItens}
+                      onChange={(e) => setConvItens(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Quantidade de Adultos</label>
+                    <input
+                      type="number"
+                      min="1"
+                      className="input"
+                      value={convAdultos}
+                      onChange={(e) => setConvAdultos(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Quantidade de Crianças</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="input"
+                      value={convCriancas}
+                      onChange={(e) => setConvCriancas(e.target.value)}
+                    />
+                  </div>
+                </div>
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Quantidade de Crianças</label>
+                  <label className="form-label">Restrições Alimentares / Observações</label>
                   <input
-                    type="number"
-                    min="0"
+                    type="text"
                     className="input"
-                    value={convCriancas}
-                    onChange={(e) => setConvCriancas(e.target.value)}
+                    placeholder="Ex: Sem glúten, vegetariano..."
+                    value={convRestricoes}
+                    onChange={(e) => setConvRestricoes(e.target.value)}
                   />
                 </div>
-              </div>
 
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Restrições Alimentares / Observações</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="Ex: Sem glúten, vegetariano..."
-                  value={convRestricoes}
-                  onChange={(e) => setConvRestricoes(e.target.value)}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
-                <button type="button" onClick={() => setModalConvidadoAberto(false)} className="btn btn-secondary">
-                  Cancelar
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={salvandoConvidado}>
-                  {salvandoConvidado ? 'Adicionando...' : 'Adicionar à Lista'}
-                </button>
-              </div>
-            </form>
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
+                  <button type="button" onClick={() => setModalConvidadoAberto(false)} className="btn btn-secondary">
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn btn-primary" disabled={salvandoConvidado}>
+                    {salvandoConvidado ? 'Adicionando...' : 'Adicionar à Lista'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
