@@ -43,6 +43,10 @@ interface Convidado {
   criancas: number
   restricoes_alimentares?: string
   itens_que_leva?: string
+  convite_enviado_em?: string
+  status_envio?: string
+  resposta_texto?: string
+  mensagem_id?: string
 }
 
 interface TarefaEvento {
@@ -221,6 +225,171 @@ export default function EventosPage() {
       alert('Erro ao sincronizar com Google Calendar: ' + err.message)
     } finally {
       setSincronizandoGoogle(false)
+    }
+  }
+
+  // --- INTEGRAÇÃO WHATSAPP (EVOLUTION API) ---
+  const [modalWhatsappAberto, setModalWhatsappAberto] = useState(false)
+  const [whatsServerUrl, setWhatsServerUrl] = useState('')
+  const [whatsApiKey, setWhatsApiKey] = useState('')
+  const [whatsInstanceName, setWhatsInstanceName] = useState('familia-os')
+  const [whatsStatus, setWhatsStatus] = useState<string>('desconectado')
+  const [whatsQrCode, setWhatsQrCode] = useState<string | null>(null)
+  const [salvandoWhatsConfig, setSalvandoWhatsConfig] = useState(false)
+  const [conectandoWhats, setConectandoWhats] = useState(false)
+  const [enviandoConviteId, setEnviandoConviteId] = useState<string | null>(null)
+  const [enviandoTodosConvites, setEnviandoTodosConvites] = useState(false)
+
+  const carregarConfigWhatsapp = async () => {
+    try {
+      const res = await fetch('/api/whatsapp/config')
+      const data = await res.json()
+      if (data.configurado) {
+        setWhatsServerUrl(data.serverUrl || '')
+        setWhatsApiKey(data.apiKey || '')
+        setWhatsInstanceName(data.instanceName || 'familia-os')
+        checarStatusWhatsapp()
+      }
+    } catch (err) {
+      console.error('Erro ao buscar config WhatsApp:', err)
+    }
+  }
+
+  const salvarConfigWhatsapp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault()
+    if (!whatsServerUrl || !whatsApiKey || !whatsInstanceName || salvandoWhatsConfig) return
+
+    setSalvandoWhatsConfig(true)
+    try {
+      const res = await fetch('/api/whatsapp/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serverUrl: whatsServerUrl,
+          apiKey: whatsApiKey,
+          instanceName: whatsInstanceName,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro ao salvar configurações.')
+      alert('Configurações da Evolution API salvas com sucesso!')
+      await checarStatusWhatsapp()
+    } catch (err: any) {
+      alert('Erro: ' + err.message)
+    } finally {
+      setSalvandoWhatsConfig(false)
+    }
+  }
+
+  const criarInstanciaWhatsapp = async () => {
+    try {
+      setConectandoWhats(true)
+      const res = await fetch('/api/whatsapp/instance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acao: 'create' }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      alert(`Instância "${whatsInstanceName}" criada com sucesso na Evolution API! Agora clique em "Conectar / Gerar QR Code".`)
+      await conectarWhatsappQrCode()
+    } catch (err: any) {
+      alert('Erro ao criar instância: ' + err.message)
+    } finally {
+      setConectandoWhats(false)
+    }
+  }
+
+  const conectarWhatsappQrCode = async () => {
+    try {
+      setConectandoWhats(true)
+      const res = await fetch('/api/whatsapp/instance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acao: 'connect' }),
+      })
+      const data = await res.json()
+      if (data.qrcode?.base64) {
+        setWhatsQrCode(data.qrcode.base64)
+      } else if (data.base64) {
+        setWhatsQrCode(data.base64)
+      } else if (data.code) {
+        setWhatsQrCode(data.code)
+      } else {
+        alert(data.message || 'Status retornado: ' + JSON.stringify(data))
+      }
+      await checarStatusWhatsapp()
+    } catch (err: any) {
+      alert('Erro ao gerar QR Code: ' + err.message)
+    } finally {
+      setConectandoWhats(false)
+    }
+  }
+
+  const checarStatusWhatsapp = async () => {
+    try {
+      const res = await fetch('/api/whatsapp/instance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acao: 'status' }),
+      })
+      const data = await res.json()
+      const estado = data?.instance?.state || data?.state || 'desconectado'
+      setWhatsStatus(estado)
+      if (estado === 'open') {
+        setWhatsQrCode(null)
+      }
+    } catch {
+      setWhatsStatus('desconectado')
+    }
+  }
+
+  const enviarConviteWhatsapp = async (convidadoId: string) => {
+    setEnviandoConviteId(convidadoId)
+    try {
+      const res = await fetch('/api/whatsapp/send-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ convidadoId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro ao enviar convite.')
+      alert('📲 Convite enviado com sucesso via WhatsApp!')
+      if (eventoAtual) await carregarDetalhesEvento(eventoAtual.id)
+    } catch (err: any) {
+      alert('Erro no envio via WhatsApp: ' + err.message)
+    } finally {
+      setEnviandoConviteId(null)
+    }
+  }
+
+  const enviarTodosConvitesWhatsapp = async () => {
+    if (!eventoAtual || enviandoTodosConvites) return
+    const pendentesComTelefone = convidados.filter((c) => c.status === 'pendente' && c.telefone)
+    if (pendentesComTelefone.length === 0) {
+      alert('Não há convidados pendentes com número de telefone cadastrado neste evento.')
+      return
+    }
+
+    if (!confirm(`Deseja enviar o convite de WhatsApp para todos os ${pendentesComTelefone.length} convidados pendentes?`)) {
+      return
+    }
+
+    setEnviandoTodosConvites(true)
+    try {
+      const res = await fetch('/api/whatsapp/send-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventoId: eventoAtual.id, todosPendentes: true }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro no envio em lote.')
+      alert(`🎉 Sucesso! Convites disparados para ${data.total} convidados via Evolution API.`)
+      await carregarDetalhesEvento(eventoAtual.id)
+    } catch (err: any) {
+      alert('Erro no envio em lote: ' + err.message)
+    } finally {
+      setEnviandoTodosConvites(false)
     }
   }
 
@@ -833,6 +1002,29 @@ export default function EventosPage() {
             </button>
           )}
 
+          <button
+            type="button"
+            onClick={() => {
+              setModalWhatsappAberto(true)
+              carregarConfigWhatsapp()
+            }}
+            className="btn btn-secondary"
+            style={{ padding: '8px 14px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <span>📲</span>
+            <span>WhatsApp (Evolution)</span>
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: whatsStatus === 'open' ? '#10b981' : whatsStatus === 'connecting' ? '#f59e0b' : '#ef4444',
+                display: 'inline-block',
+              }}
+              title={`Status da Instância: ${whatsStatus}`}
+            />
+          </button>
+
           <button type="button" onClick={abrirCriacaoEvento} className="btn btn-primary">
             🎉 + Novo Evento / Viagem
           </button>
@@ -1316,11 +1508,20 @@ export default function EventosPage() {
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                   <button
                     type="button"
+                    onClick={enviarTodosConvitesWhatsapp}
+                    disabled={enviandoTodosConvites || convidados.length === 0}
+                    className="btn btn-primary"
+                    style={{ backgroundColor: '#25D366', borderColor: '#25D366', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
+                  >
+                    {enviandoTodosConvites ? 'Enviando...' : '📲 Enviar WhatsApp para Pendentes'}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setModoConvidado('contatos')
                       setModalConvidadoAberto(true)
                     }}
-                    className="btn btn-primary"
+                    className="btn btn-secondary"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                   >
                     👥 + Importar dos Contatos ({contatosAgenda.length})
@@ -1349,6 +1550,7 @@ export default function EventosPage() {
                       <tr>
                         <th>Nome</th>
                         <th>WhatsApp / Telefone</th>
+                        <th>Convite WhatsApp</th>
                         <th>Pessoas</th>
                         <th>O que leva?</th>
                         <th>Restrições</th>
@@ -1376,6 +1578,50 @@ export default function EventosPage() {
                               ) : (
                                 <span style={{ color: 'var(--texto-secundario)', fontSize: '0.8rem' }}>-</span>
                               )}
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {c.convite_enviado_em ? (
+                                  <div style={{ fontSize: '0.75rem', color: '#059669', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                    <span>
+                                      📨 Enviado às {new Date(c.convite_enviado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    {c.resposta_texto && (
+                                      <span style={{ fontStyle: 'italic', color: 'var(--texto-secundario)' }}>
+                                        💬 "{c.resposta_texto}"
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => enviarConviteWhatsapp(c.id)}
+                                      disabled={enviandoConviteId === c.id || !c.telefone}
+                                      className="btn btn-secondary"
+                                      style={{ padding: '2px 6px', fontSize: '0.7rem', width: 'fit-content' }}
+                                    >
+                                      {enviandoConviteId === c.id ? 'Reenviando...' : '🔄 Reenviar'}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => enviarConviteWhatsapp(c.id)}
+                                    disabled={enviandoConviteId === c.id || !c.telefone}
+                                    className="btn btn-primary"
+                                    style={{
+                                      padding: '4px 8px',
+                                      fontSize: '0.75rem',
+                                      backgroundColor: '#25D366',
+                                      borderColor: '#25D366',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {enviandoConviteId === c.id ? 'Enviando...' : '📲 Enviar Convite'}
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             <td>
                               <span style={{ fontSize: '0.85rem' }}>
@@ -2489,6 +2735,190 @@ export default function EventosPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Configuração do WhatsApp (Evolution API) */}
+      {modalWhatsappAberto && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '16px',
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '560px',
+              backgroundColor: 'var(--bg-card)',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>📲</span>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Configuração WhatsApp (Evolution API)</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalWhatsappAberto(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--texto-secundario)' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Status da Instância */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '12px 16px',
+                borderRadius: 'var(--raio-md)',
+                backgroundColor: whatsStatus === 'open' ? '#ecfdf5' : whatsStatus === 'connecting' ? '#fffbeb' : '#fef2f2',
+                border: `1px solid ${whatsStatus === 'open' ? '#a7f3d0' : whatsStatus === 'connecting' ? '#fde68a' : '#fecaca'}`,
+                marginBottom: '18px',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: whatsStatus === 'open' ? '#065f46' : whatsStatus === 'connecting' ? '#b45309' : '#991b1b' }}>
+                  {whatsStatus === 'open'
+                    ? '🟢 Conectado e Pronto'
+                    : whatsStatus === 'connecting'
+                    ? '🟡 Aguardando Leitura do QR Code'
+                    : '🔴 Desconectado'}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+                  Instância: <strong>{whatsInstanceName}</strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={checarStatusWhatsapp}
+                className="btn btn-secondary"
+                style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+              >
+                🔄 Checar Status
+              </button>
+            </div>
+
+            {/* Formulário de Configuração */}
+            <form onSubmit={salvarConfigWhatsapp} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">URL do Servidor Evolution API *</label>
+                <input
+                  type="url"
+                  className="input"
+                  placeholder="https://evolution.seudominio.com"
+                  value={whatsServerUrl}
+                  onChange={(e) => setWhatsServerUrl(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">API Key Global (Token da Evolution API) *</label>
+                <input
+                  type="password"
+                  className="input"
+                  placeholder="Sua chave de autenticação apikey"
+                  value={whatsApiKey}
+                  onChange={(e) => setWhatsApiKey(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Nome da Instância *</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="familia-os"
+                  value={whatsInstanceName}
+                  onChange={(e) => setWhatsInstanceName(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '4px' }}>
+                <button type="submit" className="btn btn-primary" disabled={salvandoWhatsConfig}>
+                  {salvandoWhatsConfig ? 'Salvando...' : '💾 Salvar Configurações'}
+                </button>
+              </div>
+            </form>
+
+            {/* Ações de Conexão e QR Code */}
+            <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--borda)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 700 }}>Conectar Instância do WhatsApp</h3>
+
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={criarInstanciaWhatsapp}
+                  disabled={conectandoWhats || !whatsServerUrl || !whatsApiKey}
+                  className="btn btn-secondary"
+                  style={{ flex: 1, minWidth: '160px', padding: '8px 12px', fontSize: '0.8rem' }}
+                >
+                  ⚡ 1. Criar Nova Instância
+                </button>
+                <button
+                  type="button"
+                  onClick={conectarWhatsappQrCode}
+                  disabled={conectandoWhats || !whatsServerUrl || !whatsApiKey}
+                  className="btn btn-primary"
+                  style={{ flex: 1, minWidth: '160px', padding: '8px 12px', fontSize: '0.8rem', backgroundColor: '#25D366', borderColor: '#25D366', fontWeight: 600 }}
+                >
+                  {conectandoWhats ? 'Gerando QR...' : '📲 2. Gerar QR Code'}
+                </button>
+              </div>
+
+              {/* Exibição do QR Code */}
+              {whatsQrCode && (
+                <div style={{ textAlign: 'center', padding: '16px', backgroundColor: '#fff', borderRadius: 'var(--raio-md)', border: '2px dashed #25D366', marginTop: '8px' }}>
+                  <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#111827', marginBottom: '10px' }}>
+                    Escaneie este QR Code com o WhatsApp do seu celular:
+                  </p>
+                  <img
+                    src={whatsQrCode.startsWith('data:') ? whatsQrCode : `data:image/png;base64,${whatsQrCode}`}
+                    alt="QR Code WhatsApp"
+                    style={{ maxWidth: '240px', width: '100%', height: 'auto', margin: '0 auto', display: 'block', borderRadius: '8px' }}
+                  />
+                  <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '8px' }}>
+                    Abra o WhatsApp &gt; Aparelhos conectados &gt; Conectar aparelho
+                  </p>
+                </div>
+              )}
+
+              {/* Informações do Webhook */}
+              <div style={{ backgroundColor: 'var(--bg-hover)', padding: '12px', borderRadius: 'var(--raio-sm)', fontSize: '0.8rem', marginTop: '8px' }}>
+                <div style={{ fontWeight: 700, color: 'var(--texto-principal)', marginBottom: '4px' }}>
+                  🔗 Webhook para Confirmação Automática de Presença:
+                </div>
+                <code style={{ fontSize: '0.75rem', wordBreak: 'break-all', display: 'block', backgroundColor: 'var(--bg-card)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--borda)' }}>
+                  https://familia.martel.page/api/webhooks/whatsapp
+                </code>
+                <p style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '6px', lineHeight: '1.4' }}>
+                  Ao responderem <strong>1</strong> (Confirmar) ou <strong>2</strong> (Recusar), o status do convidado é atualizado na hora e uma mensagem de confirmação é enviada automaticamente!
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '18px' }}>
+              <button type="button" onClick={() => setModalWhatsappAberto(false)} className="btn btn-secondary">
+                Fechar
+              </button>
+            </div>
           </div>
         </div>
       )}

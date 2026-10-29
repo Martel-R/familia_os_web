@@ -66,6 +66,8 @@ interface ContatoAgenda {
   id: string
   nome: string
   especialidade?: string
+  categoria?: string
+  membro_id?: string
   telefone: string
   email?: string
 }
@@ -292,7 +294,7 @@ export default function SaudePage() {
         supabase.from('saude_vacinacao').select('*').order('data_aplicacao', { ascending: false }),
         supabase.from('saude_consultas_exames').select('*').order('data_agendada', { ascending: false }),
         supabase.from('saude_metricas_vitais').select('*').order('data_medicao', { ascending: false }),
-        supabase.from('agenda_contatos').select('id, nome, especialidade, telefone, email').order('nome'),
+        supabase.from('agenda_contatos').select('id, nome, especialidade, telefone, email, categoria, membro_id').order('nome'),
         supabase.from('saude_checkins').select('*').order('criado_em', { ascending: false }).limit(40),
       ])
 
@@ -3233,6 +3235,73 @@ export default function SaudePage() {
                           </a>
                         )}
                       </div>
+
+                      {/* Médicos Vinculados a este membro ou de família */}
+                      {(() => {
+                        const medicosMembro = contatosAgenda.filter(
+                          (c) =>
+                            c.categoria === 'medicos' &&
+                            (!c.membro_id || c.membro_id === f.usuario_id)
+                        )
+                        if (medicosMembro.length === 0) return null
+
+                        return (
+                          <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px dashed var(--borda)' }}>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#059669', marginBottom: '6px' }}>
+                              🩺 Médicos & Pediatras Vinculados:
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              {medicosMembro.map((m) => {
+                                const telLimpo = m.telefone.replace(/\D/g, '')
+                                return (
+                                  <div
+                                    key={m.id}
+                                    style={{
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      backgroundColor: 'var(--bg-card)',
+                                      padding: '6px 10px',
+                                      borderRadius: 'var(--raio-sm)',
+                                      border: '1px solid var(--borda)',
+                                      fontSize: '0.8rem',
+                                      flexWrap: 'wrap',
+                                      gap: '6px',
+                                    }}
+                                  >
+                                    <div>
+                                      <strong>{m.nome}</strong>
+                                      {m.especialidade && (
+                                        <span style={{ color: 'var(--texto-secundario)', marginLeft: '6px' }}>
+                                          • {m.especialidade}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                      <a
+                                        href={`tel:${telLimpo}`}
+                                        className="btn btn-secondary"
+                                        style={{ padding: '3px 8px', fontSize: '0.75rem', textDecoration: 'none' }}
+                                      >
+                                        📞 Ligar
+                                      </a>
+                                      <a
+                                        href={`https://wa.me/55${telLimpo}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="btn btn-primary"
+                                        style={{ padding: '3px 8px', fontSize: '0.75rem', textDecoration: 'none', backgroundColor: '#25D366', borderColor: '#25D366' }}
+                                      >
+                                        💬 Whats
+                                      </a>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })()}
                     </div>
                   </div>
                 )
