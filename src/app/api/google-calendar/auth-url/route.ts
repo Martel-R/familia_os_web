@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { connection } from 'next/server'
 import { getGoogleOAuthCredentials, gerarAuthUrlGoogle } from '@/lib/google-calendar'
 
 export async function GET(req: NextRequest) {
+  await connection()
   const { clientId, clientSecret, redirectUri } = getGoogleOAuthCredentials()
 
   if (!clientId || !clientSecret) {

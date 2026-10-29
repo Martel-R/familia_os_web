@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { connection } from 'next/server'
 import { getGoogleOAuthCredentials } from '@/lib/google-calendar'
 import { supabase } from '@/lib/supabase/client'
 
 export async function GET(req: NextRequest) {
+  await connection()
   const { clientId, clientSecret } = getGoogleOAuthCredentials()
   const isConfigured = Boolean(clientId && clientSecret)
 
