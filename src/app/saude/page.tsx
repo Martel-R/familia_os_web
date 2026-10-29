@@ -51,11 +51,23 @@ interface ConsultaExame {
   tipo: 'consulta' | 'exame'
   titulo: string
   especialista_ou_clinica?: string
-  data_agendada: string
+  data_agendada?: string
   data_retorno?: string
   observacoes?: string
+  resultado?: string
   link_anexo?: string
+  status: 'a_agendar' | 'agendado' | 'concluido' | 'cancelado'
+  contato_id?: string
+  evento_id?: string
   concluido: boolean
+}
+
+interface ContatoAgenda {
+  id: string
+  nome: string
+  especialidade?: string
+  telefone: string
+  email?: string
 }
 
 interface MetricaVital {
@@ -113,14 +125,20 @@ export default function SaudePage() {
   const [vacLocal, setVacLocal] = useState('')
   const [salvandoVacina, setSalvandoVacina] = useState(false)
 
+  const [contatosAgenda, setContatosAgenda] = useState<ContatoAgenda[]>([])
+
   // Formulário Consulta/Exame
   const [conUsuarioId, setConUsuarioId] = useState('')
   const [conTipo, setConTipo] = useState<'consulta' | 'exame'>('consulta')
   const [conTitulo, setConTitulo] = useState('')
   const [conClinica, setConClinica] = useState('')
+  const [conContatoId, setConContatoId] = useState('')
+  const [conStatus, setConStatus] = useState<'a_agendar' | 'agendado'>('agendado')
   const [conData, setConData] = useState('')
   const [conRetorno, setConRetorno] = useState('')
   const [conObs, setConObs] = useState('')
+  const [conResultado, setConResultado] = useState('')
+  const [conSincronizarAgenda, setConSincronizarAgenda] = useState(true)
   const [salvandoConsulta, setSalvandoConsulta] = useState(false)
 
   // Formulário Métrica Vital
@@ -148,12 +166,30 @@ export default function SaudePage() {
   const [editConTipo, setEditConTipo] = useState<'consulta' | 'exame'>('consulta')
   const [editConTitulo, setEditConTitulo] = useState('')
   const [editConClinica, setEditConClinica] = useState('')
+  const [editConContatoId, setEditConContatoId] = useState('')
+  const [editConStatus, setEditConStatus] = useState<'a_agendar' | 'agendado' | 'concluido' | 'cancelado'>('agendado')
   const [editConData, setEditConData] = useState('')
   const [editConRetorno, setEditConRetorno] = useState('')
   const [editConObs, setEditConObs] = useState('')
+  const [editConResultado, setEditConResultado] = useState('')
   const [editConLinkAnexo, setEditConLinkAnexo] = useState('')
   const [editConConcluido, setEditConConcluido] = useState(false)
   const [salvandoEdicaoConsulta, setSalvandoEdicaoConsulta] = useState(false)
+
+  // Modais de Ação Rápida no Ciclo de Vida:
+  const [consultaAgendando, setConsultaAgendando] = useState<ConsultaExame | null>(null)
+  const [agendarData, setAgendarData] = useState('')
+  const [agendarContatoId, setAgendarContatoId] = useState('')
+  const [agendarClinica, setAgendarClinica] = useState('')
+  const [agendarSincronizar, setAgendarSincronizar] = useState(true)
+  const [salvandoAgendamento, setSalvandoAgendamento] = useState(false)
+
+  const [consultaConfirmando, setConsultaConfirmando] = useState<ConsultaExame | null>(null)
+  const [confirmarResultado, setConfirmarResultado] = useState('')
+  const [confirmarObs, setConfirmarObs] = useState('')
+  const [confirmarRetorno, setConfirmarRetorno] = useState('')
+  const [confirmarArquivo, setConfirmarArquivo] = useState<File | null>(null)
+  const [salvandoConfirmacao, setSalvandoConfirmacao] = useState(false)
 
   // Estados para Carteirinha do Convênio e Edição de Ficha Médica
   const [arquivoCarteirinha, setArquivoCarteirinha] = useState<File | null>(null)
@@ -212,12 +248,13 @@ export default function SaudePage() {
         }
       }
 
-      const [resFichas, resMeds, resVacinas, resConsultas, resMetricas] = await Promise.all([
+      const [resFichas, resMeds, resVacinas, resConsultas, resMetricas, resContatos] = await Promise.all([
         supabase.from('saude_fichas_medicas').select('*'),
         supabase.from('saude_medicamentos').select('*').order('horario'),
         supabase.from('saude_vacinacao').select('*').order('data_aplicacao', { ascending: false }),
         supabase.from('saude_consultas_exames').select('*').order('data_agendada', { ascending: true }),
         supabase.from('saude_metricas_vitais').select('*').order('data_medicao', { ascending: false }),
+        supabase.from('agenda_contatos').select('id, nome, especialidade, telefone, email').order('nome'),
       ])
 
       if (resFichas.data) setFichas(resFichas.data)
@@ -225,6 +262,7 @@ export default function SaudePage() {
       if (resVacinas.data) setVacinas(resVacinas.data)
       if (resConsultas.data) setConsultas(resConsultas.data)
       if (resMetricas.data) setMetricas(resMetricas.data)
+      if (resContatos.data) setContatosAgenda(resContatos.data)
 
       if (usuarioLogadoId) {
         const { data: checkins } = await supabase
@@ -494,20 +532,74 @@ export default function SaudePage() {
     }
   }
 
+  // Helper: Criar evento na agenda familiar e sincronizar com Google Calendar
+  const criarEventoAgenda = async (titulo: string, dataHora: string, local: string | null, descricao: string) => {
+    try {
+      const dataInicio = new Date(dataHora)
+      const dataFim = new Date(dataInicio.getTime() + 60 * 60 * 1000)
+      const { data: novoEvento, error } = await supabase.from('eventos').insert([
+        {
+          nome: titulo,
+          data_evento: dataInicio.toISOString(),
+          data_fim: dataFim.toISOString(),
+          tipo: 'outro',
+          local: local || 'Consultório / Clínica',
+          descricao: descricao,
+        },
+      ]).select('id').single()
+
+      if (!error && novoEvento) {
+        try {
+          fetch('/api/google-calendar/sync', { method: 'POST' }).catch(() => {})
+        } catch {}
+        return novoEvento.id
+      }
+    } catch (e) {
+      console.error('Erro ao sincronizar com agenda:', e)
+    }
+    return null
+  }
+
   // --- CRUD CONSULTAS / EXAMES ---
   const handleSalvarConsulta = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!conUsuarioId || !conTitulo || !conData || salvandoConsulta) return
+    if (!conUsuarioId || !conTitulo || salvandoConsulta) return
+
+    if (conStatus === 'agendado' && !conData) {
+      alert('Por favor, informe a Data e Hora para o status Agendado.')
+      return
+    }
+
     setSalvandoConsulta(true)
     try {
+      const membro = usuarios.find((u) => u.id === conUsuarioId)
+      const contato = contatosAgenda.find((c) => c.id === conContatoId)
+      const nomeClinica = conClinica || (contato ? `${contato.nome}${contato.especialidade ? ` (${contato.especialidade})` : ''}` : null)
+
+      let eventoId = null
+      let dataIso = conData ? new Date(conData).toISOString() : null
+
+      if (conStatus === 'agendado' && dataIso && conSincronizarAgenda) {
+        eventoId = await criarEventoAgenda(
+          `${conTipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}: ${conTitulo} (${membro?.nome || 'Família'})`,
+          dataIso,
+          nomeClinica,
+          `Agendamento de saúde: ${conTitulo}. ${conObs || ''}`
+        )
+      }
+
       const payload = {
         usuario_id: conUsuarioId,
         tipo: conTipo,
         titulo: conTitulo,
-        especialista_ou_clinica: conClinica || null,
-        data_agendada: new Date(conData).toISOString(),
+        especialista_ou_clinica: nomeClinica,
+        contato_id: conContatoId || null,
+        data_agendada: dataIso,
         data_retorno: conRetorno || null,
         observacoes: conObs || null,
+        resultado: conTipo === 'exame' ? (conResultado || null) : null,
+        status: conStatus,
+        evento_id: eventoId,
         concluido: false,
       }
       const { error } = await supabase.from('saude_consultas_exames').insert([payload])
@@ -515,9 +607,13 @@ export default function SaudePage() {
       await carregarDados()
       setConTitulo('')
       setConClinica('')
+      setConContatoId('')
       setConData('')
       setConRetorno('')
       setConObs('')
+      setConResultado('')
+      setConStatus('agendado')
+      alert(conStatus === 'a_agendar' ? 'Salvo como "A Agendar"! Você poderá marcar a data quando quiser.' : 'Consulta/Exame agendado com sucesso e integrado ao calendário!')
     } catch (err: any) {
       alert('Erro ao agendar consulta/exame: ' + err.message)
     } finally {
@@ -526,13 +622,121 @@ export default function SaudePage() {
   }
 
   const toggleConcluidoConsulta = async (c: ConsultaExame) => {
-    const novo = !c.concluido
+    const novoStatus = c.status === 'concluido' ? 'agendado' : 'concluido'
+    const novoConcluido = novoStatus === 'concluido'
     try {
-      setConsultas(consultas.map((item) => (item.id === c.id ? { ...item, concluido: novo } : item)))
-      await supabase.from('saude_consultas_exames').update({ concluido: novo }).eq('id', c.id)
+      setConsultas(consultas.map((item) => (item.id === c.id ? { ...item, status: novoStatus, concluido: novoConcluido } : item)))
+      await supabase.from('saude_consultas_exames').update({ status: novoStatus, concluido: novoConcluido }).eq('id', c.id)
     } catch (err) {
       console.error(err)
       carregarDados()
+    }
+  }
+
+  const abrirModalAgendar = (c: ConsultaExame) => {
+    setConsultaAgendando(c)
+    setAgendarData(c.data_agendada ? c.data_agendada.slice(0, 16) : '')
+    setAgendarContatoId(c.contato_id || '')
+    setAgendarClinica(c.especialista_ou_clinica || '')
+    setAgendarSincronizar(true)
+  }
+
+  const handleAgendarRapido = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!consultaAgendando || !agendarData || salvandoAgendamento) return
+    setSalvandoAgendamento(true)
+    try {
+      const c = consultaAgendando
+      const membro = usuarios.find((u) => u.id === c.usuario_id)
+      const contato = contatosAgenda.find((x) => x.id === agendarContatoId)
+      const clinicaFinal = agendarClinica || (contato ? `${contato.nome}${contato.especialidade ? ` (${contato.especialidade})` : ''}` : c.especialista_ou_clinica)
+
+      const dataIso = new Date(agendarData).toISOString()
+      let eventoId = c.evento_id
+
+      if (agendarSincronizar) {
+        eventoId = await criarEventoAgenda(
+          `${c.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}: ${c.titulo} (${membro?.nome || 'Família'})`,
+          dataIso,
+          clinicaFinal || null,
+          `Consulta marcada para ${membro?.nome}. ${c.observacoes || ''}`
+        )
+      }
+
+      await supabase
+        .from('saude_consultas_exames')
+        .update({
+          status: 'agendado',
+          data_agendada: dataIso,
+          especialista_ou_clinica: clinicaFinal || null,
+          contato_id: agendarContatoId || null,
+          evento_id: eventoId,
+        })
+        .eq('id', c.id)
+
+      await carregarDados()
+      setConsultaAgendando(null)
+      alert('🎉 Consulta agendada com sucesso e sincronizada com a Agenda Familiar!')
+    } catch (err: any) {
+      alert('Erro ao agendar: ' + err.message)
+    } finally {
+      setSalvandoAgendamento(false)
+    }
+  }
+
+  const abrirModalConfirmar = (c: ConsultaExame) => {
+    setConsultaConfirmando(c)
+    setConfirmarResultado(c.resultado || '')
+    setConfirmarObs(c.observacoes || '')
+    setConfirmarRetorno(c.data_retorno ? c.data_retorno.slice(0, 10) : '')
+    setConfirmarArquivo(null)
+  }
+
+  const handleConfirmarRealizacao = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!consultaConfirmando || salvandoConfirmacao) return
+    setSalvandoConfirmacao(true)
+    try {
+      const c = consultaConfirmando
+      let linkAnexo = c.link_anexo
+
+      if (confirmarArquivo) {
+        const nomeLimpo = confirmarArquivo.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const caminhoStorage = `exames/${Date.now()}_${nomeLimpo}`
+        const { error: upErr } = await supabase.storage
+          .from('familia-os-documentos')
+          .upload(caminhoStorage, confirmarArquivo, { upsert: true })
+
+        if (!upErr) {
+          const { data: pUrl } = supabase.storage
+            .from('familia-os-documentos')
+            .getPublicUrl(caminhoStorage)
+          linkAnexo = pUrl.publicUrl
+        }
+      }
+
+      await supabase
+        .from('saude_consultas_exames')
+        .update({
+          status: 'concluido',
+          concluido: true,
+          resultado: c.tipo === 'exame' ? (confirmarResultado || null) : null,
+          observacoes: confirmarObs || null,
+          data_retorno: confirmarRetorno || null,
+          link_anexo: linkAnexo || null,
+        })
+        .eq('id', c.id)
+
+      await carregarDados()
+      setConsultaConfirmando(null)
+      alert('✅ Realização confirmada com sucesso! O registro foi marcado como Concluído.')
+
+      // Dispara reavaliação clínica com IA em segundo plano
+      dispararAvaliacaoClinicaIA(c.usuario_id)
+    } catch (err: any) {
+      alert('Erro ao confirmar: ' + err.message)
+    } finally {
+      setSalvandoConfirmacao(false)
     }
   }
 
@@ -552,37 +756,50 @@ export default function SaudePage() {
     setEditConTipo(c.tipo)
     setEditConTitulo(c.titulo)
     setEditConClinica(c.especialista_ou_clinica || '')
+    setEditConContatoId(c.contato_id || '')
+    setEditConStatus(c.status || (c.concluido ? 'concluido' : 'agendado'))
 
     try {
-      const d = new Date(c.data_agendada)
-      const offset = d.getTimezoneOffset() * 60000
-      const localISOTime = new Date(d.getTime() - offset).toISOString().slice(0, 16)
-      setEditConData(localISOTime)
+      if (c.data_agendada) {
+        const d = new Date(c.data_agendada)
+        const offset = d.getTimezoneOffset() * 60000
+        const localISOTime = new Date(d.getTime() - offset).toISOString().slice(0, 16)
+        setEditConData(localISOTime)
+      } else {
+        setEditConData('')
+      }
     } catch {
       setEditConData(c.data_agendada ? c.data_agendada.slice(0, 16) : '')
     }
 
     setEditConRetorno(c.data_retorno ? c.data_retorno.slice(0, 10) : '')
     setEditConObs(c.observacoes || '')
+    setEditConResultado(c.resultado || '')
     setEditConLinkAnexo(c.link_anexo || '')
-    setEditConConcluido(c.concluido)
+    setEditConConcluido(c.status === 'concluido' || c.concluido)
   }
 
   const handleSalvarEdicaoConsulta = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!consultaEditando || !editConTitulo || !editConData || salvandoEdicaoConsulta) return
+    if (!consultaEditando || !editConTitulo || salvandoEdicaoConsulta) return
     setSalvandoEdicaoConsulta(true)
     try {
+      const contato = contatosAgenda.find((x) => x.id === editConContatoId)
+      const clinicaFinal = editConClinica || (contato ? `${contato.nome}${contato.especialidade ? ` (${contato.especialidade})` : ''}` : null)
+
       const payload = {
         usuario_id: editConUsuarioId,
         tipo: editConTipo,
         titulo: editConTitulo,
-        especialista_ou_clinica: editConClinica || null,
-        data_agendada: new Date(editConData).toISOString(),
+        especialista_ou_clinica: clinicaFinal,
+        contato_id: editConContatoId || null,
+        data_agendada: editConData ? new Date(editConData).toISOString() : null,
         data_retorno: editConRetorno || null,
         observacoes: editConObs || null,
+        resultado: editConTipo === 'exame' ? (editConResultado || null) : null,
+        status: editConStatus,
         link_anexo: editConLinkAnexo || null,
-        concluido: editConConcluido,
+        concluido: editConStatus === 'concluido' || editConConcluido,
       }
 
       const { error } = await supabase
@@ -865,8 +1082,9 @@ export default function SaudePage() {
           titulo: ex.titulo_exame || 'Exame Laboratorial',
           especialista_ou_clinica: labClinica,
           data_agendada: new Date(dataAgendada).toISOString(),
-          observacoes:
-            obsPartes || 'Exame importado automaticamente via Inteligência Artificial.',
+          status: 'concluido',
+          resultado: obsPartes || 'Resultados extraídos via Inteligência Artificial.',
+          observacoes: ex.conclusao_ou_interpretacao || laudoExtraido.resumo_geral || null,
           link_anexo: iaLinkAnexo || null,
           concluido: true,
         }
@@ -1430,7 +1648,7 @@ export default function SaudePage() {
       {abaAtiva === 'consultas' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px' }}>
           <div className="card">
-            <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '16px' }}>📋 Agendar Consulta ou Exame</h2>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '16px' }}>📋 Registrar Consulta ou Exame</h2>
             <form onSubmit={handleSalvarConsulta} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px', alignItems: 'flex-end' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Membro</label>
@@ -1438,6 +1656,7 @@ export default function SaudePage() {
                   {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
                 </select>
               </div>
+
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Tipo</label>
                 <select className="input" value={conTipo} onChange={(e) => setConTipo(e.target.value as any)}>
@@ -1445,24 +1664,119 @@ export default function SaudePage() {
                   <option value="exame">🧪 Exame / Laboratório</option>
                 </select>
               </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Status do Agendamento</label>
+                <select className="input" value={conStatus} onChange={(e) => setConStatus(e.target.value as any)}>
+                  <option value="agendado">🗓️ Agendado (Com data/hora marcadas)</option>
+                  <option value="a_agendar">📅 A Agendar (Pendente de marcação)</option>
+                </select>
+              </div>
+
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Título / Especialidade</label>
-                <input type="text" className="input" placeholder="Ex: Pediatra, Oftalmologista" value={conTitulo} onChange={(e) => setConTitulo(e.target.value)} required />
+                <input type="text" className="input" placeholder="Ex: Pediatra, Oftalmologista, Hemograma" value={conTitulo} onChange={(e) => setConTitulo(e.target.value)} required />
               </div>
+
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Médico ou Clínica</label>
-                <input type="text" className="input" placeholder="Ex: Dr. Marcelo, Lab Sabin" value={conClinica} onChange={(e) => setConClinica(e.target.value)} />
+                <label className="form-label">Médico / Contato da Agenda</label>
+                <select
+                  className="input"
+                  value={conContatoId}
+                  onChange={(e) => {
+                    const cid = e.target.value
+                    setConContatoId(cid)
+                    const sel = contatosAgenda.find((x) => x.id === cid)
+                    if (sel) {
+                      setConClinica(`${sel.nome}${sel.especialidade ? ` (${sel.especialidade})` : ''}`)
+                    }
+                  }}
+                >
+                  <option value="">-- Selecionar da Agenda de Contatos --</option>
+                  {contatosAgenda.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nome} {c.especialidade ? `• ${c.especialidade}` : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
+
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Data e Hora Agendada</label>
-                <input type="datetime-local" className="input" value={conData} onChange={(e) => setConData(e.target.value)} required />
+                <label className="form-label">Nome da Clínica / Consultório</label>
+                <input type="text" className="input" placeholder="Ex: Clínica São Marcos, Lab Sabin" value={conClinica} onChange={(e) => setConClinica(e.target.value)} />
               </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">
+                  {conStatus === 'agendado' ? 'Data e Hora Agendada *' : 'Data Prevista (Opcional)'}
+                </label>
+                <input
+                  type="datetime-local"
+                  className="input"
+                  value={conData}
+                  onChange={(e) => setConData(e.target.value)}
+                  required={conStatus === 'agendado'}
+                />
+              </div>
+
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Data de Retorno (Opcional)</label>
                 <input type="date" className="input" value={conRetorno} onChange={(e) => setConRetorno(e.target.value)} />
               </div>
-              <button type="submit" className="btn btn-primary" style={{ height: '42px' }} disabled={salvandoConsulta}>
-                {salvandoConsulta ? 'Agendando...' : '+ Salvar Agendamento'}
+
+              {conTipo === 'exame' ? (
+                <>
+                  <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <label className="form-label">Resultado do Exame (Parâmetros / Laudo)</label>
+                    <textarea
+                      className="input"
+                      rows={2}
+                      placeholder="Ex: Glicemia: 92 mg/dL; Colesterol Total: 175 mg/dL; Laudo: Sem alterações"
+                      value={conResultado}
+                      onChange={(e) => setConResultado(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <label className="form-label">Observações / Instruções de Preparo</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Ex: Jejum de 12 horas, coletar primeira urina da manhã"
+                      value={conObs}
+                      onChange={(e) => setConObs(e.target.value)}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                  <label className="form-label">Observações Médicas / Conduta da Consulta</label>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    placeholder="Ex: Dr. solicitou exames de sangue e recomendou reduzir sódio. Retorno previsto em 30 dias."
+                    value={conObs}
+                    onChange={(e) => setConObs(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {conStatus === 'agendado' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', gridColumn: '1 / -1' }}>
+                  <input
+                    type="checkbox"
+                    id="sincronizarAgenda"
+                    checked={conSincronizarAgenda}
+                    onChange={(e) => setConSincronizarAgenda(e.target.checked)}
+                    style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                  />
+                  <label htmlFor="sincronizarAgenda" style={{ fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600 }}>
+                    📅 Sincronizar automaticamente com a Agenda Familiar e Google Calendar
+                  </label>
+                </div>
+              )}
+
+              <button type="submit" className="btn btn-primary" style={{ height: '42px', gridColumn: '1 / -1' }} disabled={salvandoConsulta}>
+                {salvandoConsulta ? 'Salvando...' : conStatus === 'a_agendar' ? '+ Salvar como "A Agendar"' : '+ Salvar e Agendar'}
               </button>
             </form>
           </div>
@@ -1478,14 +1792,15 @@ export default function SaudePage() {
                 <table className="tabela">
                   <thead>
                     <tr>
-                      <th title="Marque a caixa para indicar que a consulta ou exame já foi realizado. Se desmarcado, significa agendado/pendente.">Realizado / Concluído</th>
+                      <th>Status</th>
                       <th>Membro</th>
                       <th>Tipo</th>
                       <th>Especialidade / Título</th>
                       <th>Médico / Clínica</th>
                       <th>Data e Hora</th>
                       <th>Retorno</th>
-                      <th>Observações / Laudo</th>
+                      <th>Resultado (Exame)</th>
+                      <th>Observações / Conduta (Consulta)</th>
                       <th>Laudo / Arquivo</th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
@@ -1493,16 +1808,104 @@ export default function SaudePage() {
                   <tbody>
                     {consultas.map((c) => {
                       const u = usuarios.find((x) => x.id === c.usuario_id)
+                      const contato = contatosAgenda.find((x) => x.id === c.contato_id)
+                      const dataValida = c.data_agendada ? new Date(c.data_agendada) : null
+                      const jaPassou = dataValida ? dataValida <= new Date() : false
+
                       return (
                         <tr key={c.id}>
                           <td>
-                            <input
-                              type="checkbox"
-                              checked={c.concluido}
-                              onChange={() => toggleConcluidoConsulta(c)}
-                              style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-sucesso)' }}
-                              title={c.concluido ? 'Marcado como Realizado / Concluído' : 'Pendente / Agendado'}
-                            />
+                            {c.status === 'a_agendar' && (
+                              <button
+                                type="button"
+                                onClick={() => abrirModalAgendar(c)}
+                                className="btn"
+                                style={{
+                                  backgroundColor: '#fff7ed',
+                                  color: '#c2410c',
+                                  border: '1px solid #fdba74',
+                                  padding: '4px 10px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                  borderRadius: '9999px',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title="Clique para agendar com o médico e adicionar ao calendário"
+                              >
+                                📅 A Agendar
+                              </button>
+                            )}
+
+                            {c.status === 'agendado' && (
+                              <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => abrirModalConfirmar(c)}
+                                  className="btn"
+                                  style={{
+                                    backgroundColor: '#eff6ff',
+                                    color: '#1d4ed8',
+                                    border: '1px solid #93c5fd',
+                                    padding: '4px 10px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 700,
+                                    borderRadius: '9999px',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                  title="Consulta com data marcada. Clique para confirmar a realização."
+                                >
+                                  🗓️ Agendado
+                                </button>
+                                {jaPassou && (
+                                  <button
+                                    type="button"
+                                    onClick={() => abrirModalConfirmar(c)}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--cor-sucesso)',
+                                      fontSize: '0.7rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer',
+                                      padding: 0,
+                                      textDecoration: 'underline',
+                                    }}
+                                    title="Data da consulta alcançada! Clique para confirmar que compareceu."
+                                  >
+                                    ⚠️ Confirmar Realização
+                                  </button>
+                                )}
+                              </div>
+                            )}
+
+                            {c.status === 'concluido' && (
+                              <span
+                                style={{
+                                  backgroundColor: '#ecfdf5',
+                                  color: '#047857',
+                                  border: '1px solid #6ee7b7',
+                                  padding: '4px 10px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                  borderRadius: '9999px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title="Consulta/Exame realizada com sucesso"
+                              >
+                                ✅ Concluído
+                              </span>
+                            )}
                           </td>
                           <td style={{ fontWeight: 600 }}>{u?.nome || 'Membro'}</td>
                           <td>
@@ -1510,10 +1913,60 @@ export default function SaudePage() {
                               {c.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}
                             </span>
                           </td>
-                          <td style={{ textDecoration: c.concluido ? 'line-through' : 'none', fontWeight: 600 }}>{c.titulo}</td>
-                          <td>{c.especialista_ou_clinica || '-'}</td>
-                          <td>{new Date(c.data_agendada).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                          <td style={{ textDecoration: c.status === 'concluido' ? 'line-through' : 'none', fontWeight: 600 }}>{c.titulo}</td>
+                          <td>
+                            <div>
+                              <span>{c.especialista_ou_clinica || '-'}</span>
+                              {contato?.telefone && (
+                                <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
+                                  <a
+                                    href={`tel:${contato.telefone.replace(/\D/g, '')}`}
+                                    style={{ fontSize: '0.75rem', color: 'var(--cor-primaria)', textDecoration: 'none' }}
+                                    title={`Ligar para ${contato.telefone}`}
+                                  >
+                                    📞 {contato.telefone}
+                                  </a>
+                                  <a
+                                    href={`https://wa.me/${contato.telefone.replace(/\D/g, '')}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ fontSize: '0.75rem', color: '#16a34a', textDecoration: 'none' }}
+                                    title="Conversar no WhatsApp"
+                                  >
+                                    💬 Whats
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            {dataValida ? (
+                              dataValida.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+                            ) : (
+                              <span style={{ color: '#c2410c', fontWeight: 600, fontSize: '0.8rem' }}>📅 A Definir</span>
+                            )}
+                          </td>
                           <td>{c.data_retorno ? new Date(c.data_retorno).toLocaleDateString('pt-BR') : '-'}</td>
+                          
+                          {/* Coluna RESULTADO (Apenas para Exames) */}
+                          <td
+                            onClick={() => setConsultaDetalhes(c)}
+                            style={{
+                              maxWidth: '180px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              fontSize: '0.8rem',
+                              color: c.tipo === 'exame' && c.resultado ? 'var(--cor-primaria)' : 'var(--texto-secundario)',
+                              fontWeight: c.tipo === 'exame' && c.resultado ? 600 : 400,
+                              cursor: 'pointer',
+                            }}
+                            title={c.tipo === 'exame' ? (c.resultado || 'Sem resultado registrado') : 'Não se aplica a consultas'}
+                          >
+                            {c.tipo === 'exame' ? (c.resultado || '-') : '-'}
+                          </td>
+
+                          {/* Coluna OBSERVAÇÕES / CONDUTA (Para Consultas ou Preparo) */}
                           <td
                             onClick={() => setConsultaDetalhes(c)}
                             style={{
@@ -1529,6 +1982,7 @@ export default function SaudePage() {
                           >
                             {c.observacoes || '-'}
                           </td>
+
                           <td>
                             {c.link_anexo ? (
                               <a
@@ -1547,6 +2001,28 @@ export default function SaudePage() {
                           </td>
                           <td style={{ textAlign: 'right' }}>
                             <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                              {c.status === 'a_agendar' && (
+                                <button
+                                  type="button"
+                                  onClick={() => abrirModalAgendar(c)}
+                                  className="btn btn-primary"
+                                  style={{ padding: '3px 8px', fontSize: '0.75rem' }}
+                                  title="Agendar data com o médico"
+                                >
+                                  📅 Agendar
+                                </button>
+                              )}
+                              {c.status === 'agendado' && (
+                                <button
+                                  type="button"
+                                  onClick={() => abrirModalConfirmar(c)}
+                                  className="btn btn-secondary"
+                                  style={{ padding: '3px 8px', fontSize: '0.75rem', color: 'var(--cor-sucesso)', fontWeight: 600 }}
+                                  title="Confirmar que foi realizada"
+                                >
+                                  ✅ Confirmar
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setConsultaDetalhes(c)}
@@ -1941,6 +2417,210 @@ export default function SaudePage() {
       )}
 
       {/* ======================================================== */}
+      {/* MODAL 1: AGENDAR CONSULTA / EXAME RÁPIDO                 */}
+      {/* ======================================================== */}
+      {consultaAgendando && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '580px', backgroundColor: 'var(--bg-card)', border: '2px solid #fdba74', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>🗓️</span>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                  Agendar com Médico: {consultaAgendando.titulo}
+                </h2>
+              </div>
+              <button type="button" onClick={() => setConsultaAgendando(null)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', marginBottom: '16px' }}>
+              Defina a data/hora marcada com o médico ou clínica. O status mudará automaticamente para <strong>Agendado</strong> e será sincronizado com a Agenda Familiar.
+            </p>
+
+            <form onSubmit={handleAgendarRapido} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Médico / Contato da Agenda</label>
+                <select
+                  className="input"
+                  value={agendarContatoId}
+                  onChange={(e) => {
+                    const cid = e.target.value
+                    setAgendarContatoId(cid)
+                    const sel = contatosAgenda.find((x) => x.id === cid)
+                    if (sel) {
+                      setAgendarClinica(`${sel.nome}${sel.especialidade ? ` (${sel.especialidade})` : ''}`)
+                    }
+                  }}
+                >
+                  <option value="">-- Selecionar da Agenda de Contatos --</option>
+                  {contatosAgenda.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nome} {c.especialidade ? `• ${c.especialidade}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {agendarContatoId && (
+                (() => {
+                  const sel = contatosAgenda.find((x) => x.id === agendarContatoId)
+                  if (!sel?.telefone) return null
+                  const limpo = sel.telefone.replace(/\D/g, '')
+                  return (
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center', backgroundColor: 'var(--bg-hover)', padding: '10px', borderRadius: 'var(--raio-sm)' }}>
+                      <span style={{ fontSize: '0.85rem' }}>Contato do Médico: <strong>{sel.telefone}</strong></span>
+                      <a href={`tel:${limpo}`} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '0.75rem', textDecoration: 'none' }}>
+                        📞 Ligar
+                      </a>
+                      <a href={`https://wa.me/${limpo}`} target="_blank" rel="noopener noreferrer" className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '0.75rem', textDecoration: 'none' }}>
+                        💬 WhatsApp
+                      </a>
+                    </div>
+                  )
+                })()
+              )}
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Nome da Clínica / Consultório</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={agendarClinica}
+                  onChange={(e) => setAgendarClinica(e.target.value)}
+                  placeholder="Ex: Consultório Dr. André"
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Data e Hora Marcada *</label>
+                <input
+                  type="datetime-local"
+                  className="input"
+                  value={agendarData}
+                  onChange={(e) => setAgendarData(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                <input
+                  type="checkbox"
+                  id="agendarSincronizar"
+                  checked={agendarSincronizar}
+                  onChange={(e) => setAgendarSincronizar(e.target.checked)}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                />
+                <label htmlFor="agendarSincronizar" style={{ fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600 }}>
+                  📅 Criar evento na Agenda Familiar e no Google Calendar
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+                <button type="button" onClick={() => setConsultaAgendando(null)} className="btn btn-secondary">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={salvandoAgendamento} className="btn btn-primary" style={{ fontWeight: 700 }}>
+                  {salvandoAgendamento ? 'Salvando...' : 'Salvar e Marcar como Agendado'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL 2: CONFIRMAR REALIZAÇÃO (CONCLUÍDO)                 */}
+      {/* ======================================================== */}
+      {consultaConfirmando && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '580px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-sucesso)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>✅</span>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                  Confirmar Realização: {consultaConfirmando.titulo}
+                </h2>
+              </div>
+              <button type="button" onClick={() => setConsultaConfirmando(null)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', marginBottom: '14px' }}>
+              {consultaConfirmando.tipo === 'consulta'
+                ? 'Registre abaixo o que o médico orientou durante o atendimento (conduta, receitas, cuidados).'
+                : 'Registre abaixo o resultado ou laudo emitido pelo laboratório/clínica.'}
+            </p>
+
+            <form onSubmit={handleConfirmarRealizacao} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {consultaConfirmando.tipo === 'consulta' ? (
+                <>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Observações Médicas / Conduta da Consulta</label>
+                    <textarea
+                      className="input"
+                      rows={4}
+                      placeholder="Ex: Dr. solicitou exames de sangue, receitou vitamina D 2.000 UI por dia e recomendou caminhadas 3x por semana."
+                      value={confirmarObs}
+                      onChange={(e) => setConfirmarObs(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Data de Retorno Prevista (Opcional)</label>
+                    <input
+                      type="date"
+                      className="input"
+                      value={confirmarRetorno}
+                      onChange={(e) => setConfirmarRetorno(e.target.value)}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Resultado do Exame (Parâmetros / Laudo)</label>
+                    <textarea
+                      className="input"
+                      rows={4}
+                      placeholder="Ex: Glicemia de Jejum: 89 mg/dL; Hemoglobina Glicada: 5.4%; Colesterol Total: 165 mg/dL. Conclusão: Todos parâmetros normais."
+                      value={confirmarResultado}
+                      onChange={(e) => setConfirmarResultado(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Observações / Anotações Complementares</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Ex: Exame colhido em jejum de 12 horas"
+                      value={confirmarObs}
+                      onChange={(e) => setConfirmarObs(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Anexar Arquivo ou Foto do Laudo (Opcional)</label>
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      className="input"
+                      style={{ padding: '7px 12px' }}
+                      onChange={(e) => setConfirmarArquivo(e.target.files?.[0] || null)}
+                    />
+                  </div>
+                </>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+                <button type="button" onClick={() => setConsultaConfirmando(null)} className="btn btn-secondary">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={salvandoConfirmacao} className="btn btn-primary" style={{ fontWeight: 700 }}>
+                  {salvandoConfirmacao ? 'Salvando...' : 'Concluir e Salvar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
       {/* MODAL DE EDIÇÃO DE CONSULTA / EXAME                      */}
       {/* ======================================================== */}
       {consultaEditando && (
@@ -1972,19 +2652,52 @@ export default function SaudePage() {
                 </select>
               </div>
 
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Status</label>
+                <select className="input" value={editConStatus} onChange={(e) => setEditConStatus(e.target.value as any)}>
+                  <option value="a_agendar">📅 A Agendar</option>
+                  <option value="agendado">🗓️ Agendado</option>
+                  <option value="concluido">✅ Concluído</option>
+                  <option value="cancelado">❌ Cancelado</option>
+                </select>
+              </div>
+
               <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                 <label className="form-label">Título / Especialidade</label>
                 <input type="text" className="input" value={editConTitulo} onChange={(e) => setEditConTitulo(e.target.value)} required />
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Médico ou Clínica</label>
+                <label className="form-label">Médico / Contato da Agenda</label>
+                <select
+                  className="input"
+                  value={editConContatoId}
+                  onChange={(e) => {
+                    const cid = e.target.value
+                    setEditConContatoId(cid)
+                    const sel = contatosAgenda.find((x) => x.id === cid)
+                    if (sel) {
+                      setEditConClinica(`${sel.nome}${sel.especialidade ? ` (${sel.especialidade})` : ''}`)
+                    }
+                  }}
+                >
+                  <option value="">-- Nenhum / Digitar manualmente --</option>
+                  {contatosAgenda.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nome} {c.especialidade ? `• ${c.especialidade}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Nome da Clínica / Consultório</label>
                 <input type="text" className="input" value={editConClinica} onChange={(e) => setEditConClinica(e.target.value)} />
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Data e Hora Agendada</label>
-                <input type="datetime-local" className="input" value={editConData} onChange={(e) => setEditConData(e.target.value)} required />
+                <input type="datetime-local" className="input" value={editConData} onChange={(e) => setEditConData(e.target.value)} />
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
@@ -1997,23 +2710,23 @@ export default function SaudePage() {
                 <input type="url" className="input" placeholder="https://..." value={editConLinkAnexo} onChange={(e) => setEditConLinkAnexo(e.target.value)} />
               </div>
 
-              <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                <label className="form-label">Observações / Conclusão do Laudo</label>
-                <textarea className="input" rows={3} value={editConObs} onChange={(e) => setEditConObs(e.target.value)} />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', gridColumn: '1 / -1' }}>
-                <input
-                  type="checkbox"
-                  id="editConConcluido"
-                  checked={editConConcluido}
-                  onChange={(e) => setEditConConcluido(e.target.checked)}
-                  style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-sucesso)' }}
-                />
-                <label htmlFor="editConConcluido" style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600 }}>
-                  Marcar como Concluído / Realizado
-                </label>
-              </div>
+              {editConTipo === 'exame' ? (
+                <>
+                  <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <label className="form-label">Resultado do Exame (Parâmetros / Valores)</label>
+                    <textarea className="input" rows={3} value={editConResultado} onChange={(e) => setEditConResultado(e.target.value)} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <label className="form-label">Observações / Preparo</label>
+                    <input type="text" className="input" value={editConObs} onChange={(e) => setEditConObs(e.target.value)} />
+                  </div>
+                </>
+              ) : (
+                <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                  <label className="form-label">Observações Médicas / Conduta da Consulta</label>
+                  <textarea className="input" rows={3} value={editConObs} onChange={(e) => setEditConObs(e.target.value)} />
+                </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', gridColumn: '1 / -1', marginTop: '10px' }}>
                 <button type="button" onClick={() => setConsultaEditando(null)} className="btn btn-secondary">
@@ -2039,9 +2752,24 @@ export default function SaudePage() {
                 <span style={{ fontSize: '1.75rem' }}>{consultaDetalhes.tipo === 'consulta' ? '🩺' : '🧪'}</span>
                 <div>
                   <h2 style={{ fontSize: '1.25rem', fontWeight: 800 }}>{consultaDetalhes.titulo}</h2>
-                  <span className={`badge ${consultaDetalhes.tipo === 'consulta' ? 'badge-primary' : 'badge-secondary'}`}>
-                    {consultaDetalhes.tipo === 'consulta' ? 'Consulta Médica' : 'Exame Laboratorial'}
-                  </span>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px' }}>
+                    <span className={`badge ${consultaDetalhes.tipo === 'consulta' ? 'badge-primary' : 'badge-secondary'}`}>
+                      {consultaDetalhes.tipo === 'consulta' ? 'Consulta Médica' : 'Exame Laboratorial'}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: '9999px',
+                        backgroundColor: consultaDetalhes.status === 'concluido' ? '#ecfdf5' : consultaDetalhes.status === 'a_agendar' ? '#fff7ed' : '#eff6ff',
+                        color: consultaDetalhes.status === 'concluido' ? '#047857' : consultaDetalhes.status === 'a_agendar' ? '#c2410c' : '#1d4ed8',
+                        border: `1px solid ${consultaDetalhes.status === 'concluido' ? '#6ee7b7' : consultaDetalhes.status === 'a_agendar' ? '#fdba74' : '#93c5fd'}`,
+                      }}
+                    >
+                      {consultaDetalhes.status === 'concluido' ? '✅ Concluído' : consultaDetalhes.status === 'a_agendar' ? '📅 A Agendar' : '🗓️ Agendado'}
+                    </span>
+                  </div>
                 </div>
               </div>
               <button type="button" onClick={() => setConsultaDetalhes(null)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
@@ -2057,11 +2785,28 @@ export default function SaudePage() {
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>MÉDICO / CLÍNICA / LAB:</span>
                 <div style={{ fontWeight: 600 }}>{consultaDetalhes.especialista_ou_clinica || '-'}</div>
+                {(() => {
+                  const contato = contatosAgenda.find((x) => x.id === consultaDetalhes.contato_id)
+                  if (!contato?.telefone) return null
+                  const limpo = contato.telefone.replace(/\D/g, '')
+                  return (
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                      <a href={`tel:${limpo}`} style={{ fontSize: '0.75rem', color: 'var(--cor-primaria)', textDecoration: 'none' }}>
+                        📞 {contato.telefone}
+                      </a>
+                      <a href={`https://wa.me/${limpo}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem', color: '#16a34a', textDecoration: 'none' }}>
+                        💬 WhatsApp
+                      </a>
+                    </div>
+                  )
+                })()}
               </div>
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>DATA E HORA:</span>
                 <div style={{ fontWeight: 600 }}>
-                  {new Date(consultaDetalhes.data_agendada).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                  {consultaDetalhes.data_agendada
+                    ? new Date(consultaDetalhes.data_agendada).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+                    : 'A definir'}
                 </div>
               </div>
               <div>
@@ -2086,16 +2831,69 @@ export default function SaudePage() {
               </div>
             )}
 
-            <div style={{ marginBottom: '24px' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '8px' }}>
-                📝 Parâmetros, Resultados & Conclusão do Laudo:
-              </h3>
-              <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '0.9rem', backgroundColor: 'var(--bg-card)', padding: '16px', borderRadius: 'var(--raio-md)', border: '1px solid var(--borda)' }}>
-                {consultaDetalhes.observacoes || 'Nenhuma observação clínica registrada para este item.'}
-              </div>
-            </div>
+            {/* SEGREGAÇÃO CLARA: RESULTADO (EXAME) VS OBSERVAÇÕES / CONDUTA (CONSULTA) */}
+            {consultaDetalhes.tipo === 'exame' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+                <div>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '8px', color: 'var(--cor-primaria)' }}>
+                    🧪 Resultado do Exame (Parâmetros / Laudo):
+                  </h3>
+                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '0.9rem', backgroundColor: 'var(--bg-hover)', padding: '14px', borderRadius: 'var(--raio-md)', border: '1px solid var(--borda)' }}>
+                    {consultaDetalhes.resultado || 'Nenhum resultado registrado ainda.'}
+                  </div>
+                </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                {consultaDetalhes.observacoes && (
+                  <div>
+                    <h4 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '6px', color: 'var(--texto-secundario)' }}>
+                      📝 Instruções de Preparo / Observações Gerais:
+                    </h4>
+                    <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5', fontSize: '0.85rem', backgroundColor: 'var(--bg-card)', padding: '12px', borderRadius: 'var(--raio-md)', border: '1px solid var(--borda)' }}>
+                      {consultaDetalhes.observacoes}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ marginBottom: '24px' }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '8px', color: 'var(--cor-primaria)' }}>
+                  🩺 Observações Médicas / Conduta da Consulta:
+                </h3>
+                <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '0.9rem', backgroundColor: 'var(--bg-hover)', padding: '14px', borderRadius: 'var(--raio-md)', border: '1px solid var(--borda)' }}>
+                  {consultaDetalhes.observacoes || 'Nenhuma anotação médica ou conduta registrada para esta consulta.'}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap' }}>
+              {consultaDetalhes.status === 'a_agendar' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const item = consultaDetalhes
+                    setConsultaDetalhes(null)
+                    abrirModalAgendar(item)
+                  }}
+                  className="btn btn-primary"
+                  style={{ fontWeight: 700 }}
+                >
+                  📅 Agendar Agora
+                </button>
+              )}
+              {consultaDetalhes.status === 'agendado' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const item = consultaDetalhes
+                    setConsultaDetalhes(null)
+                    abrirModalConfirmar(item)
+                  }}
+                  className="btn btn-primary"
+                  style={{ fontWeight: 700 }}
+                >
+                  ✅ Confirmar Realização
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -2103,10 +2901,10 @@ export default function SaudePage() {
                   setConsultaDetalhes(null)
                   abrirEdicaoConsulta(item)
                 }}
-                className="btn btn-primary"
+                className="btn btn-secondary"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
               >
-                ✏️ Editar Este Exame
+                ✏️ Editar Registro
               </button>
               <button type="button" onClick={() => setConsultaDetalhes(null)} className="btn btn-secondary">
                 Fechar
