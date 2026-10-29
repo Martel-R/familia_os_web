@@ -28,6 +28,8 @@ interface Evento {
   descricao?: string
   orcamento_estimado: number
   roteiro_viagem?: ItemRoteiro[]
+  google_event_id?: string
+  sincronizado_google?: boolean
   criado_em: string
 }
 
@@ -135,7 +137,63 @@ export default function EventosPage() {
   const [rotDescricao, setRotDescricao] = useState('')
   const [salvandoRoteiro, setSalvandoRoteiro] = useState(false)
 
+  // Integração Google Calendar (OAuth 2.0)
+  const [googleStatus, setGoogleStatus] = useState<{
+    configured: boolean
+    connected: boolean
+    email?: string
+  } | null>(null)
+  const [sincronizandoGoogle, setSincronizandoGoogle] = useState(false)
+
   const eventoAtual = eventos.find((e) => e.id === eventoAtivoId) || eventos[0] || null
+
+  const carregarStatusGoogle = async () => {
+    try {
+      const res = await fetch('/api/google-calendar/status')
+      const data = await res.json()
+      setGoogleStatus(data)
+    } catch (err) {
+      console.error('Erro ao verificar status do Google Calendar:', err)
+    }
+  }
+
+  const conectarGoogle = async () => {
+    try {
+      const res = await fetch('/api/google-calendar/auth-url')
+      const data = await res.json()
+      if (!data.configured) {
+        alert(
+          'Para conectar com a sua Google Agenda oficial via OAuth 2.0:\n\n' +
+          '1. Crie um projeto no Google Cloud Console (https://console.cloud.google.com)\n' +
+          '2. Ative a "Google Calendar API"\n' +
+          '3. Em "Credenciais", crie um "ID do cliente OAuth 2.0" (aplicativo da Web)\n' +
+          '4. Adicione o seguinte URI de redirecionamento autorizado:\n' +
+          (data.redirectUri || 'http://localhost:3000/api/google-calendar/callback') + '\n\n' +
+          '5. Defina as variáveis no arquivo .env.local:\nGOOGLE_CLIENT_ID=seu_client_id\nGOOGLE_CLIENT_SECRET=seu_client_secret'
+        )
+        return
+      }
+      window.location.href = data.url
+    } catch (err: any) {
+      alert('Erro ao conectar com Google Agenda: ' + err.message)
+    }
+  }
+
+  const sincronizarGoogle = async () => {
+    if (sincronizandoGoogle) return
+    setSincronizandoGoogle(true)
+    try {
+      const res = await fetch('/api/google-calendar/sync', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro na sincronização')
+      alert(`Sincronização com o Google Calendar realizada com sucesso!\n\n📥 Importados do Google: ${data.importadosDoGoogle}\n📤 Enviados para o Google: ${data.enviadosParaOGoogle}`)
+      await carregarDados()
+    } catch (err: any) {
+      alert('Erro ao sincronizar com Google Calendar: ' + err.message)
+    } finally {
+      setSincronizandoGoogle(false)
+    }
+  }
 
   const carregarDados = async () => {
     try {
@@ -190,6 +248,20 @@ export default function EventosPage() {
 
   useEffect(() => {
     carregarDados()
+    carregarStatusGoogle()
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('google_connected') === 'true') {
+        const email = params.get('email')
+        alert(`Conta Google conectada com sucesso (${email || ''})! Sincronizando eventos...`)
+        sincronizarGoogle()
+        window.history.replaceState({}, '', window.location.pathname)
+      } else if (params.get('google_error')) {
+        alert('Erro na autorização do Google: ' + params.get('google_error'))
+        window.history.replaceState({}, '', window.location.pathname)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -539,13 +611,41 @@ export default function EventosPage() {
             Planejamento de Eventos, Viagens & Festas
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Lista de convidados com RSVP, checklists de preparação, orçamento e roteiros dia a dia.
+            Lista de convidados com RSVP, checklists de preparação, orçamento e integração com Google Calendar.
           </p>
         </div>
 
-        <button type="button" onClick={abrirCriacaoEvento} className="btn btn-primary">
-          🎉 + Novo Evento / Viagem
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {googleStatus?.connected ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="badge badge-success" title={`Conectado à Google Agenda (${googleStatus.email})`}>
+                🟢 Google Calendar: {googleStatus.email}
+              </span>
+              <button
+                type="button"
+                onClick={sincronizarGoogle}
+                disabled={sincronizandoGoogle}
+                className="btn btn-secondary"
+                style={{ padding: '8px 14px', fontSize: '0.85rem' }}
+              >
+                {sincronizandoGoogle ? '🔄 Sincronizando...' : '🔄 Sincronizar Google'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={conectarGoogle}
+              className="btn btn-secondary"
+              style={{ padding: '8px 14px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              📅 Conectar Google Agenda
+            </button>
+          )}
+
+          <button type="button" onClick={abrirCriacaoEvento} className="btn btn-primary">
+            🎉 + Novo Evento / Viagem
+          </button>
+        </div>
       </div>
 
       {/* Seletor de Eventos Cadastrados */}
