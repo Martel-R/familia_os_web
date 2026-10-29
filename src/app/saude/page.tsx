@@ -127,6 +127,11 @@ export default function SaudePage() {
   const [novoMembroMetricasLoteId, setNovoMembroMetricasLoteId] = useState('')
   const [executandoAcaoLoteMetricas, setExecutandoAcaoLoteMetricas] = useState(false)
 
+  // Estados do Gráfico de Evolução de Métricas Vitais
+  const [graficoMetricaTipo, setGraficoMetricaTipo] = useState<'pressao' | 'glicemia' | 'peso' | 'altura' | 'temperatura'>('pressao')
+  const [graficoMembroId, setGraficoMembroId] = useState<string>('')
+  const [dataHojeIso, setDataHojeIso] = useState<string>('2026-10-29')
+
   // Formulário Ficha
   const [fichaUsuarioId, setFichaUsuarioId] = useState('')
   const [tipoSanguineo, setTipoSanguineo] = useState('O+')
@@ -311,6 +316,7 @@ export default function SaudePage() {
   }
 
   useEffect(() => {
+    setDataHojeIso(new Date().toISOString().slice(0, 10))
     carregarDados()
   }, [usuarioLogadoId])
 
@@ -1364,6 +1370,115 @@ export default function SaudePage() {
     }
   }
 
+  // --- CÁLCULO DE LEMBRETES PREVENTIVOS & RETORNOS NÃO AGENDADOS ---
+  const lembretesNaoAgendados = (() => {
+    const lista: {
+      id: string
+      tipo: 'retorno' | 'vacina' | 'checkup'
+      membroId: string
+      membroNome: string
+      titulo: string
+      descricao: string
+      dataSugerida?: string
+      dadosOrigem?: any
+    }[] = []
+
+    const hojeTime = new Date(dataHojeIso + 'T12:00:00').getTime()
+
+    // 1. Consultas com data de retorno ou 'a_agendar' sem agendamento futuro
+    consultas.forEach((c) => {
+      if (c.data_retorno && c.concluido) {
+        const jaTemAgendado = consultas.some(
+          (outro) =>
+            outro.usuario_id === c.usuario_id &&
+            outro.status === 'agendado' &&
+            outro.data_agendada &&
+            outro.data_agendada >= c.data_retorno!
+        )
+
+        if (!jaTemAgendado) {
+          const u = usuarios.find((x) => x.id === c.usuario_id)
+          lista.push({
+            id: `retorno-${c.id}`,
+            tipo: 'retorno',
+            membroId: c.usuario_id,
+            membroNome: u?.nome || 'Membro',
+            titulo: `Retorno com ${c.especialista_ou_clinica || c.titulo}`,
+            descricao: `O médico sugeriu retorno até ${new Date(c.data_retorno + 'T12:00:00').toLocaleDateString('pt-BR')}, mas ainda não foi marcado no calendário.`,
+            dataSugerida: c.data_retorno,
+            dadosOrigem: c,
+          })
+        }
+      }
+
+      if (c.status === 'a_agendar') {
+        const u = usuarios.find((x) => x.id === c.usuario_id)
+        lista.push({
+          id: `a_agendar-${c.id}`,
+          tipo: 'retorno',
+          membroId: c.usuario_id,
+          membroNome: u?.nome || 'Membro',
+          titulo: `${c.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}: ${c.titulo}`,
+          descricao: `Item pendente de agendamento com ${c.especialista_ou_clinica || 'clínica'}.`,
+          dadosOrigem: c,
+        })
+      }
+    })
+
+    // 2. Próximas doses de vacinas sem agendamento correspondente
+    vacinas.forEach((v) => {
+      if (v.data_proxima_dose) {
+        const jaTemAgendado = consultas.some(
+          (c) =>
+            c.usuario_id === v.usuario_id &&
+            c.status === 'agendado' &&
+            c.data_agendada &&
+            c.data_agendada.slice(0, 10) === v.data_proxima_dose
+        )
+
+        if (!jaTemAgendado) {
+          const u = usuarios.find((x) => x.id === v.usuario_id)
+          lista.push({
+            id: `vacina-${v.id}`,
+            tipo: 'vacina',
+            membroId: v.usuario_id,
+            membroNome: u?.nome || 'Membro',
+            titulo: `Dose de Reforço: ${v.nome_vacina}`,
+            descricao: `Próxima dose prevista para ${new Date(v.data_proxima_dose + 'T12:00:00').toLocaleDateString('pt-BR')}.`,
+            dataSugerida: v.data_proxima_dose,
+            dadosOrigem: v,
+          })
+        }
+      }
+    })
+
+    // 3. Check-up anual: se o membro não tem exame recente há mais de 365 dias e nenhum agendado
+    usuarios.forEach((u) => {
+      const examesMembro = consultas.filter((c) => c.usuario_id === u.id && c.tipo === 'exame')
+      const temExameAgendado = examesMembro.some((c) => c.status === 'agendado')
+
+      if (!temExameAgendado) {
+        const examesConcluidos = examesMembro.filter((c) => c.status === 'concluido' && c.data_agendada)
+        if (examesConcluidos.length > 0) {
+          const maisRecente = examesConcluidos.sort((a, b) => new Date(b.data_agendada!).getTime() - new Date(a.data_agendada!).getTime())[0]
+          const diffDias = Math.floor((hojeTime - new Date(maisRecente.data_agendada!).getTime()) / (1000 * 60 * 60 * 24))
+          if (diffDias >= 365) {
+            lista.push({
+              id: `checkup-${u.id}`,
+              tipo: 'checkup',
+              membroId: u.id,
+              membroNome: u.nome,
+              titulo: `Check-up Anual de Rotina (${u.nome})`,
+              descricao: `Faz mais de 1 ano (${Math.floor(diffDias / 30)} meses) desde os últimos exames laboratoriais.`,
+            })
+          }
+        }
+      }
+    })
+
+    return lista
+  })()
+
   return (
     <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', boxSizing: 'border-box' }}>
       {/* Topo / Header */}
@@ -1494,6 +1609,105 @@ export default function SaudePage() {
           </div>
         </div>
       </div>
+
+      {/* PAINEL DE LEMBRETES PREVENTIVOS & RETORNOS NÃO AGENDADOS */}
+      {lembretesNaoAgendados.length > 0 ? (
+        <div
+          className="card"
+          style={{
+            marginBottom: '24px',
+            borderLeft: '4px solid #f59e0b',
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid #fde68a',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.4rem' }}>🔔</span>
+              <div>
+                <h2 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#b45309' }}>
+                  Lembretes Preventivos & Retornos Pendentes de Agendamento ({lembretesNaoAgendados.length})
+                </h2>
+                <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+                  Itens recomendados pelo médico ou calendário de vacinas que ainda <strong>não estão marcados no seu calendário</strong>.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+            {lembretesNaoAgendados.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  backgroundColor: 'var(--bg-hover)',
+                  padding: '12px 14px',
+                  borderRadius: 'var(--raio-md)',
+                  border: '1px solid var(--borda)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        color: item.tipo === 'vacina' ? '#059669' : item.tipo === 'checkup' ? '#7c3aed' : '#d97706',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {item.tipo === 'vacina' ? '💉 Vacina' : item.tipo === 'checkup' ? '🧪 Check-up Anual' : '🩺 Retorno Médico'}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--texto-secundario)' }}>
+                      {item.membroNome}
+                    </span>
+                  </div>
+                  <strong style={{ fontSize: '0.9rem', color: 'var(--texto-principal)' }}>{item.titulo}</strong>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginTop: '4px', lineHeight: '1.4' }}>
+                    {item.descricao}
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
+                  {item.dadosOrigem && item.tipo === 'retorno' ? (
+                    <button
+                      type="button"
+                      onClick={() => abrirModalAgendar(item.dadosOrigem)}
+                      className="btn btn-primary"
+                      style={{ padding: '5px 12px', fontSize: '0.75rem', fontWeight: 700 }}
+                    >
+                      📅 Agendar com o Médico
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAbaAtiva('consultas')
+                        setConTitulo(item.titulo)
+                        setConStatus('a_agendar')
+                        setConUsuarioId(item.membroId)
+                      }}
+                      className="btn btn-primary"
+                      style={{ padding: '5px 12px', fontSize: '0.75rem', fontWeight: 700 }}
+                    >
+                      📅 Agendar no Calendário
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: '20px', padding: '10px 14px', backgroundColor: '#ecfdf5', borderRadius: 'var(--raio-md)', border: '1px solid #a7f3d0', fontSize: '0.85rem', color: '#065f46', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span>✓</span>
+          <span><strong>Tudo em dia!</strong> Todos os retornos médicos e vacinas da família já possuem agendamento no seu calendário.</span>
+        </div>
+      )}
 
       {/* Abas de Navegação do Módulo de Saúde */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: '1px solid var(--borda)', paddingBottom: '8px', overflowX: 'auto' }}>
@@ -2492,6 +2706,259 @@ export default function SaudePage() {
                 {salvandoMetrica ? 'Salvando...' : '+ Salvar Medição'}
               </button>
             </form>
+          </div>
+
+          {/* GRÁFICO DE EVOLUÇÃO TEMPORAL DE MÉTRICAS VITAIS */}
+          <div className="card" style={{ padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span>📈</span> Evolução Temporal & Tendências de Saúde
+                </h3>
+                <p style={{ color: 'var(--texto-secundario)', fontSize: '0.8rem', marginTop: '2px' }}>
+                  Acompanhe a curva clínica de medições ao longo dos dias e meses.
+                </p>
+              </div>
+
+              {/* Filtro por Membro */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', fontWeight: 600 }}>Membro:</span>
+                <select
+                  className="input"
+                  value={graficoMembroId}
+                  onChange={(e) => setGraficoMembroId(e.target.value)}
+                  style={{ width: 'auto', padding: '6px 12px', fontSize: '0.85rem' }}
+                >
+                  <option value="">Todos os Membros</option>
+                  {usuarios.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Seletor de Tipo de Métrica */}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '18px' }}>
+              {[
+                { tipo: 'pressao', label: '🩸 Pressão Arterial', unidade: 'mmHg' },
+                { tipo: 'glicemia', label: '🍬 Glicemia', unidade: 'mg/dL' },
+                { tipo: 'peso', label: '⚖️ Peso Corporal', unidade: 'kg' },
+                { tipo: 'altura', label: '📏 Altura', unidade: 'cm' },
+                { tipo: 'temperatura', label: '🌡️ Temperatura', unidade: '°C' },
+              ].map((m) => (
+                <button
+                  key={m.tipo}
+                  type="button"
+                  onClick={() => setGraficoMetricaTipo(m.tipo as any)}
+                  className={`btn ${graficoMetricaTipo === m.tipo ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '6px 14px', fontSize: '0.8rem', fontWeight: 600 }}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Renderização do Gráfico SVG Responsivo */}
+            {(() => {
+              const pontosFiltrados = metricas
+                .filter((m) => m.tipo_metrica === graficoMetricaTipo && (!graficoMembroId || m.usuario_id === graficoMembroId))
+                .sort((a, b) => new Date(a.data_medicao).getTime() - new Date(b.data_medicao).getTime())
+                .slice(-15) // últimos 15 registros cronológicos
+
+              if (pontosFiltrados.length === 0) {
+                return (
+                  <div style={{ textAlign: 'center', padding: '36px 0', color: 'var(--texto-secundario)', fontSize: '0.85rem' }}>
+                    Nenhuma medição registrada para este tipo. Registre novas aferições acima para visualizar a curva de evolução!
+                  </div>
+                )
+              }
+
+              const ehPressao = graficoMetricaTipo === 'pressao'
+              const ehGlicemia = graficoMetricaTipo === 'glicemia'
+
+              // Cálculo de Escalas
+              const valoresY = ehPressao
+                ? [
+                    ...pontosFiltrados.map((p) => p.valor_principal),
+                    ...pontosFiltrados.map((p) => p.valor_secundario || 80),
+                    140,
+                    60,
+                  ]
+                : ehGlicemia
+                ? [...pontosFiltrados.map((p) => p.valor_principal), 110, 70]
+                : pontosFiltrados.map((p) => p.valor_principal)
+
+              const minY = Math.min(...valoresY) * 0.9
+              const maxY = Math.max(...valoresY) * 1.1
+
+              const svgLargura = 720
+              const svgAltura = 220
+              const padLeft = 45
+              const padRight = 35
+              const padTop = 30
+              const padBottom = 35
+
+              const larguraUtil = svgLargura - padLeft - padRight
+              const alturaUtil = svgAltura - padTop - padBottom
+
+              const getX = (index: number) => {
+                if (pontosFiltrados.length === 1) return padLeft + larguraUtil / 2
+                return padLeft + (index / (pontosFiltrados.length - 1)) * larguraUtil
+              }
+
+              const getY = (val: number) => {
+                const ratio = (val - minY) / (maxY - minY || 1)
+                return padTop + (1 - ratio) * alturaUtil
+              }
+
+              // Coordenadas das linhas
+              const ptsPrincipal = pontosFiltrados.map((p, i) => `${getX(i)},${getY(p.valor_principal)}`).join(' ')
+              const ptsSecundario = ehPressao
+                ? pontosFiltrados.map((p, i) => `${getX(i)},${getY(p.valor_secundario || 80)}`).join(' ')
+                : ''
+
+              // Linhas de referência (120/80 para pressão, 100 para glicemia)
+              const yRef120 = ehPressao ? getY(120) : null
+              const yRef80 = ehPressao ? getY(80) : null
+              const yRef100 = ehGlicemia ? getY(100) : null
+
+              // Estatísticas
+              const ultimo = pontosFiltrados[pontosFiltrados.length - 1]
+              const mediaPrinc = (
+                pontosFiltrados.reduce((acc, p) => acc + p.valor_principal, 0) / pontosFiltrados.length
+              ).toFixed(1)
+              const mediaSec = ehPressao
+                ? (pontosFiltrados.reduce((acc, p) => acc + (p.valor_secundario || 80), 0) / pontosFiltrados.length).toFixed(0)
+                : null
+
+              return (
+                <div>
+                  <div style={{ width: '100%', overflowX: 'auto', paddingBottom: '6px' }}>
+                    <div style={{ minWidth: '600px' }}>
+                      <svg viewBox={`0 0 ${svgLargura} ${svgAltura}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+                        {/* Linhas de Grade Horizontais */}
+                        {[0, 0.25, 0.5, 0.75, 1].map((r, idx) => {
+                          const y = padTop + r * alturaUtil
+                          const valorGrade = (maxY - r * (maxY - minY)).toFixed(0)
+                          return (
+                            <g key={idx}>
+                              <line x1={padLeft} y1={y} x2={svgLargura - padRight} y2={y} stroke="var(--borda)" strokeDasharray="3 3" />
+                              <text x={padLeft - 8} y={y + 4} textAnchor="end" fontSize="10" fill="var(--texto-secundario)">
+                                {valorGrade}
+                              </text>
+                            </g>
+                          )
+                        })}
+
+                        {/* Linhas de Referência Clínica */}
+                        {yRef120 !== null && (
+                          <g>
+                            <line x1={padLeft} y1={yRef120} x2={svgLargura - padRight} y2={yRef120} stroke="#10b981" strokeWidth="1.5" strokeDasharray="5 4" opacity="0.8" />
+                            <text x={svgLargura - padRight + 4} y={yRef120 + 3} fontSize="9" fill="#10b981" fontWeight="bold">
+                              120 (Ref. Normal)
+                            </text>
+                          </g>
+                        )}
+
+                        {yRef80 !== null && (
+                          <g>
+                            <line x1={padLeft} y1={yRef80} x2={svgLargura - padRight} y2={yRef80} stroke="#3b82f6" strokeWidth="1.5" strokeDasharray="5 4" opacity="0.8" />
+                            <text x={svgLargura - padRight + 4} y={yRef80 + 3} fontSize="9" fill="#3b82f6" fontWeight="bold">
+                              80 (Ref. Normal)
+                            </text>
+                          </g>
+                        )}
+
+                        {yRef100 !== null && (
+                          <g>
+                            <line x1={padLeft} y1={yRef100} x2={svgLargura - padRight} y2={yRef100} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="5 4" opacity="0.85" />
+                            <text x={svgLargura - padRight + 4} y={yRef100 + 3} fontSize="9" fill="#f59e0b" fontWeight="bold">
+                              100 (Limite Jejum)
+                            </text>
+                          </g>
+                        )}
+
+                        {/* Linha Diastólica (se Pressão) */}
+                        {ehPressao && ptsSecundario && (
+                          <polyline fill="none" stroke="#3b82f6" strokeWidth="3" points={ptsSecundario} strokeLinecap="round" strokeLinejoin="round" />
+                        )}
+
+                        {/* Linha Principal */}
+                        <polyline fill="none" stroke={ehPressao ? '#ef4444' : 'var(--cor-primaria)'} strokeWidth="3" points={ptsPrincipal} strokeLinecap="round" strokeLinejoin="round" />
+
+                        {/* Pontos Interativos e Rótulos */}
+                        {pontosFiltrados.map((p, i) => {
+                          const x = getX(i)
+                          const yPrinc = getY(p.valor_principal)
+                          const ySec = ehPressao ? getY(p.valor_secundario || 80) : null
+                          const d = new Date(p.data_medicao)
+                          const rotuloData = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
+
+                          return (
+                            <g key={p.id}>
+                              {/* Ponto Principal */}
+                              <circle cx={x} cy={yPrinc} r="5" fill="#ffffff" stroke={ehPressao ? '#ef4444' : 'var(--cor-primaria)'} strokeWidth="3" />
+                              <text x={x} y={yPrinc - 8} textAnchor="middle" fontSize="10" fontWeight="bold" fill={ehPressao ? '#ef4444' : 'var(--cor-primaria)'}>
+                                {p.valor_principal}
+                              </text>
+
+                              {/* Ponto Diastólica */}
+                              {ehPressao && ySec !== null && (
+                                <>
+                                  <circle cx={x} cy={ySec} r="5" fill="#ffffff" stroke="#3b82f6" strokeWidth="3" />
+                                  <text x={x} y={ySec + 15} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#3b82f6">
+                                    {p.valor_secundario || 80}
+                                  </text>
+                                </>
+                              )}
+
+                              {/* Rótulo de Data no Eixo X */}
+                              <text x={x} y={svgAltura - 10} textAnchor="middle" fontSize="10" fill="var(--texto-secundario)">
+                                {rotuloData}
+                              </text>
+                            </g>
+                          )
+                        })}
+                      </svg>
+                    </div>
+                  </div>
+
+                  {/* Legenda e Métricas Consolidadas */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--borda)', flexWrap: 'wrap', gap: '12px' }}>
+                    <div style={{ display: 'flex', gap: '14px', fontSize: '0.8rem', fontWeight: 600 }}>
+                      {ehPressao ? (
+                        <>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#ef4444' }}>
+                            <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#ef4444' }} />
+                            Sistólica (Maior)
+                          </span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#3b82f6' }}>
+                            <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#3b82f6' }} />
+                            Diastólica (Menor)
+                          </span>
+                        </>
+                      ) : (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--cor-primaria)' }}>
+                          <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--cor-primaria)' }} />
+                          {pontosFiltrados[0].unidade}
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem', color: 'var(--texto-secundario)' }}>
+                      <span>
+                        Última: <strong>{ehPressao ? `${ultimo.valor_principal} x ${ultimo.valor_secundario} mmHg` : `${ultimo.valor_principal} ${ultimo.unidade}`}</strong>
+                      </span>
+                      <span>
+                        Média do Período: <strong>{ehPressao ? `${mediaPrinc} x ${mediaSec} mmHg` : `${mediaPrinc} ${pontosFiltrados[0].unidade}`}</strong>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
 
           <div className="card">
