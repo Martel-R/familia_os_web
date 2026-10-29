@@ -127,18 +127,12 @@ export default function SaudePage() {
   const [arquivoIa, setArquivoIa] = useState<File | null>(null)
   const [processandoIa, setProcessandoIa] = useState(false)
   const [modalIaAberto, setModalIaAberto] = useState(false)
-  const [exameExtraido, setExameExtraido] = useState<any>(null)
-  const [salvandoExameIa, setSalvandoExameIa] = useState(false)
+  const [laudoExtraido, setLaudoExtraido] = useState<any>(null)
+  const [salvandoExamesIa, setSalvandoExamesIa] = useState(false)
   const [iaLinkAnexo, setIaLinkAnexo] = useState('')
-  const [conArquivo, setConArquivo] = useState<File | null>(null)
-
-  // Campos editáveis da extração
   const [iaMembroId, setIaMembroId] = useState('')
-  const [iaTitulo, setIaTitulo] = useState('')
-  const [iaClinica, setIaClinica] = useState('')
-  const [iaData, setIaData] = useState('')
-  const [iaConclusao, setIaConclusao] = useState('')
-  const [iaMetricasSelecionadas, setIaMetricasSelecionadas] = useState<{ [index: number]: boolean }>({})
+  const [examesSelecionados, setExamesSelecionados] = useState<{ [index: number]: boolean }>({})
+  const [conArquivo, setConArquivo] = useState<File | null>(null)
 
   const emojisHumor = [
     { nivel: 1, label: 'Muito Mal', emoji: '😢' },
@@ -481,12 +475,50 @@ export default function SaudePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Erro ao analisar exame.')
 
-      setExameExtraido(data)
-      setIaTitulo(data.titulo_exame || 'Exame Médico')
-      setIaClinica(data.laboratorio_ou_clinica || '')
-      setIaData(data.data_exame || new Date().toISOString().split('T')[0])
-      setIaConclusao(data.conclusao_ou_diagnostico || '')
+      // Normaliza lista de múltiplos exames identificados no laudo
+      let listaExamesNormalizada: any[] = []
+      if (data.exames && Array.isArray(data.exames) && data.exames.length > 0) {
+        listaExamesNormalizada = data.exames
+      } else if (data.titulo_exame) {
+        listaExamesNormalizada = [
+          {
+            titulo_exame: data.titulo_exame,
+            data_exame: data.data_exame || data.data_geral,
+            conclusao_ou_interpretacao: data.conclusao_ou_diagnostico || data.resumo_geral,
+            resultados: (data.metricas || []).map((m: any) => ({
+              nome_parametro: m.nome_parametro,
+              resultado: String(m.valor_obtido),
+              valor_numerico: m.valor_obtido,
+              unidade: m.unidade,
+              valor_referencia: m.valor_referencia,
+              status_resultado: m.status_resultado,
+            })),
+          },
+        ]
+      } else {
+        listaExamesNormalizada = [
+          {
+            titulo_exame: 'Exame Laboratorial',
+            data_exame: data.data_geral || new Date().toISOString().split('T')[0],
+            conclusao_ou_interpretacao: data.resumo_geral,
+            resultados: [],
+          },
+        ]
+      }
 
+      setLaudoExtraido({
+        ...data,
+        exames: listaExamesNormalizada,
+      })
+
+      // Seleciona todos os exames inicialmente
+      const sel: { [index: number]: boolean } = {}
+      listaExamesNormalizada.forEach((_, idx) => {
+        sel[idx] = true
+      })
+      setExamesSelecionados(sel)
+
+      // Identifica o membro familiar pelo nome do paciente
       if (data.paciente_nome && usuarios.length > 0) {
         const achou = usuarios.find((u) =>
           data.paciente_nome.toLowerCase().includes(u.nome.toLowerCase()) ||
@@ -497,13 +529,6 @@ export default function SaudePage() {
         setIaMembroId(usuarios[0].id)
       }
 
-      const selecionadas: { [index: number]: boolean } = {}
-      if (data.metricas && Array.isArray(data.metricas)) {
-        data.metricas.forEach((_: any, idx: number) => {
-          selecionadas[idx] = true
-        })
-      }
-      setIaMetricasSelecionadas(selecionadas)
       setModalIaAberto(true)
     } catch (err: any) {
       alert('Erro na extração com IA: ' + err.message)
@@ -513,71 +538,128 @@ export default function SaudePage() {
     }
   }
 
-  const salvarExameIaNoSistema = async () => {
-    if (!iaMembroId || !iaTitulo || salvandoExameIa) return
-    setSalvandoExameIa(true)
+  const salvarExamesIaNoSistema = async () => {
+    if (!iaMembroId || !laudoExtraido || salvandoExamesIa) return
+    setSalvandoExamesIa(true)
     try {
-      const resumoMetricas = exameExtraido?.metricas
-        ?.map((m: any) => `${m.nome_parametro}: ${m.valor_obtido} ${m.unidade}`)
-        .join(', ')
+      const examesParaSalvar = (laudoExtraido.exames || []).filter(
+        (_: any, idx: number) => examesSelecionados[idx]
+      )
 
-      const obsCompleta = [
-        iaConclusao ? `Conclusão do Laudo: ${iaConclusao}` : '',
-        resumoMetricas ? `Métricas identificadas: ${resumoMetricas}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n\n')
-
-      const payloadExame = {
-        usuario_id: iaMembroId,
-        tipo: 'exame',
-        titulo: iaTitulo,
-        especialista_ou_clinica: iaClinica || null,
-        data_agendada: new Date(iaData || new Date()).toISOString(),
-        observacoes: obsCompleta || 'Exame importado automaticamente via Inteligência Artificial.',
-        link_anexo: iaLinkAnexo || null,
-        concluido: true,
+      if (examesParaSalvar.length === 0) {
+        alert('Selecione pelo menos um exame para registrar.')
+        return
       }
 
-      await supabase.from('saude_consultas_exames').insert([payloadExame])
+      const hoje = new Date().toISOString().split('T')[0]
+      const dataGeral = laudoExtraido.data_geral || hoje
+      const labClinica =
+        laudoExtraido.laboratorio_ou_clinica ||
+        laudoExtraido.medico_solicitante ||
+        null
 
-      if (exameExtraido?.metricas && Array.isArray(exameExtraido.metricas)) {
-        const metricasParaInserir = exameExtraido.metricas
-          .filter((_: any, idx: number) => iaMetricasSelecionadas[idx])
-          .map((m: any) => {
-            let tipoNormalizado: 'pressao' | 'glicemia' | 'peso' | 'altura' | 'temperatura' = 'glicemia'
-            const lowerNome = (m.nome_parametro || '').toLowerCase()
-            const lowerTipo = (m.tipo_metrica || '').toLowerCase()
+      let totalMetricasInseridas = 0
 
-            if (lowerTipo.includes('press') || lowerNome.includes('press')) tipoNormalizado = 'pressao'
-            else if (lowerTipo.includes('peso') || lowerNome.includes('peso')) tipoNormalizado = 'peso'
-            else if (lowerTipo.includes('altur') || lowerNome.includes('estatura')) tipoNormalizado = 'altura'
-            else if (lowerTipo.includes('temp') || lowerNome.includes('febre')) tipoNormalizado = 'temperatura'
+      for (const ex of examesParaSalvar) {
+        const resumoResultados = (ex.resultados || [])
+          .map(
+            (r: any) =>
+              `${r.nome_parametro}: ${r.resultado}${
+                r.unidade ? ' ' + r.unidade : ''
+              }`
+          )
+          .join('\n• ')
+
+        const obsPartes = [
+          ex.conclusao_ou_interpretacao
+            ? `Conclusão: ${ex.conclusao_ou_interpretacao}`
+            : '',
+          laudoExtraido.resumo_geral
+            ? `Resumo Geral do Laudo: ${laudoExtraido.resumo_geral}`
+            : '',
+          resumoResultados ? `Resultados:\n• ${resumoResultados}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+
+        const dataAgendada = ex.data_exame || dataGeral
+        const payloadExame = {
+          usuario_id: iaMembroId,
+          tipo: 'exame',
+          titulo: ex.titulo_exame || 'Exame Laboratorial',
+          especialista_ou_clinica: labClinica,
+          data_agendada: new Date(dataAgendada).toISOString(),
+          observacoes:
+            obsPartes || 'Exame importado automaticamente via Inteligência Artificial.',
+          link_anexo: iaLinkAnexo || null,
+          concluido: true,
+        }
+
+        await supabase.from('saude_consultas_exames').insert([payloadExame])
+
+        // Inserir métricas vitais mensuráveis numericamente
+        const metricasDoExame = (ex.resultados || [])
+          .filter(
+            (r: any) =>
+              r.valor_numerico !== null &&
+              r.valor_numerico !== undefined &&
+              !isNaN(Number(r.valor_numerico))
+          )
+          .map((r: any) => {
+            let tipoNormalizado:
+              | 'pressao'
+              | 'glicemia'
+              | 'peso'
+              | 'altura'
+              | 'temperatura' = 'glicemia'
+            const lowerNome = (r.nome_parametro || '').toLowerCase()
+
+            if (lowerNome.includes('press') || lowerNome.includes('pa '))
+              tipoNormalizado = 'pressao'
+            else if (lowerNome.includes('peso') || lowerNome.includes('massa'))
+              tipoNormalizado = 'peso'
+            else if (
+              lowerNome.includes('altur') ||
+              lowerNome.includes('estatura')
+            )
+              tipoNormalizado = 'altura'
+            else if (
+              lowerNome.includes('temp') ||
+              lowerNome.includes('febre')
+            )
+              tipoNormalizado = 'temperatura'
             else tipoNormalizado = 'glicemia'
 
             return {
               usuario_id: iaMembroId,
               tipo_metrica: tipoNormalizado,
-              valor_principal: parseFloat(m.valor_obtido) || 0,
-              unidade: m.unidade || '',
-              observacao: `${m.nome_parametro} (Ref: ${m.valor_referencia || 'N/A'}) - Laudo IA`,
-              data_medicao: new Date(iaData || new Date()).toISOString(),
+              valor_principal: parseFloat(r.valor_numerico),
+              unidade: r.unidade || '',
+              observacao: `${r.nome_parametro} (${ex.titulo_exame}) - Ref: ${
+                r.valor_referencia || 'N/A'
+              }`,
+              data_medicao: new Date(dataAgendada).toISOString(),
             }
           })
 
-        if (metricasParaInserir.length > 0) {
-          await supabase.from('saude_metricas_vitais').insert(metricasParaInserir)
+        if (metricasDoExame.length > 0) {
+          await supabase
+            .from('saude_metricas_vitais')
+            .insert(metricasDoExame)
+          totalMetricasInseridas += metricasDoExame.length
         }
       }
 
       await carregarDados()
       setModalIaAberto(false)
-      setExameExtraido(null)
-      alert('🎉 Exame e métricas laboratoriais registrados com sucesso no sistema!')
+      setLaudoExtraido(null)
+      alert(
+        `🎉 Sucesso! ${examesParaSalvar.length} exames e ${totalMetricasInseridas} medições laboratoriais foram registrados no prontuário da família!`
+      )
     } catch (err: any) {
-      alert('Erro ao salvar exame: ' + err.message)
+      alert('Erro ao salvar exames: ' + err.message)
     } finally {
-      setSalvandoExameIa(false)
+      setSalvandoExamesIa(false)
     }
   }
 
@@ -1222,23 +1304,28 @@ export default function SaudePage() {
       )}
 
       {/* ======================================================== */}
-      {/* MODAL DE REVISÃO E CONFIRMAÇÃO DO EXAME IA               */}
+      {/* MODAL DE REVISÃO E CONFIRMAÇÃO DE MÚLTIPLOS EXAMES COM IA */}
       {/* ======================================================== */}
-      {modalIaAberto && exameExtraido && (
+      {modalIaAberto && laudoExtraido && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10001, padding: '16px' }}>
-          <div className="card" style={{ width: '100%', maxWidth: '750px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '820px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '1.75rem' }}>🤖</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '2rem' }}>🔬</span>
                 <div>
-                  <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--cor-primaria)' }}>Exame Interpretado com IA</h2>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)' }}>Revise os dados extraídos pelo Gemini 2.5 Flash antes de registrar no sistema.</p>
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--cor-primaria)' }}>
+                    Laudo Analisado: {laudoExtraido.exames?.length || 0} Exame(s) Identificado(s)
+                  </h2>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)' }}>
+                    O Gemini identificou todos os exames contidos no documento. Selecione os que deseja registrar.
+                  </p>
                 </div>
               </div>
               <button type="button" onClick={() => setModalIaAberto(false)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '16px' }}>
+            {/* Cabeçalho do Laudo */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '16px', padding: '14px', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--raio-md)' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Membro da Família</label>
                 <select className="input" value={iaMembroId} onChange={(e) => setIaMembroId(e.target.value)}>
@@ -1247,89 +1334,128 @@ export default function SaudePage() {
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Título do Exame</label>
-                <input type="text" className="input" value={iaTitulo} onChange={(e) => setIaTitulo(e.target.value)} required />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Laboratório / Clínica</label>
-                <input type="text" className="input" value={iaClinica} onChange={(e) => setIaClinica(e.target.value)} />
+                <input
+                  type="text"
+                  className="input"
+                  value={laudoExtraido.laboratorio_ou_clinica || ''}
+                  onChange={(e) => setLaudoExtraido({ ...laudoExtraido, laboratorio_ou_clinica: e.target.value })}
+                />
               </div>
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Data do Exame</label>
-                <input type="date" className="input" value={iaData} onChange={(e) => setIaData(e.target.value)} required />
+                <label className="form-label">Data Geral do Laudo</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={laudoExtraido.data_geral || new Date().toISOString().split('T')[0]}
+                  onChange={(e) => setLaudoExtraido({ ...laudoExtraido, data_geral: e.target.value })}
+                />
               </div>
 
-              <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                <label className="form-label">Conclusão / Laudo do Médico</label>
-                <textarea className="input" rows={2} value={iaConclusao} onChange={(e) => setIaConclusao(e.target.value)} />
-              </div>
+              {iaLinkAnexo && (
+                <div style={{ gridColumn: '1 / -1', marginTop: '4px' }}>
+                  <a
+                    href={iaLinkAnexo}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}
+                  >
+                    📄 Abrir Arquivo Original Enviado ({arquivoIa?.name || 'Ver Documento'})
+                  </a>
+                </div>
+              )}
             </div>
 
-            {/* Tabela de Métricas Extraídas */}
-            {exameExtraido.metricas && exameExtraido.metricas.length > 0 && (
-              <div style={{ marginBottom: '20px' }}>
-                <h3 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '8px' }}>
-                  📊 Métricas & Parâmetros Identificados ({exameExtraido.metricas.length}):
-                </h3>
-                <p style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginBottom: '8px' }}>
-                  Desmarque os itens que não deseja registrar no diário de métricas vitais.
-                </p>
+            {/* Lista Discriminada de Todos os Exames */}
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '12px' }}>
+              Exames Encontrados no Arquivo:
+            </h3>
 
-                <div className="tabela-container" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                  <table className="tabela">
-                    <thead>
-                      <tr>
-                        <th style={{ width: '40px' }}>Incluir</th>
-                        <th>Parâmetro</th>
-                        <th>Resultado</th>
-                        <th>Referência</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {exameExtraido.metricas.map((m: any, idx: number) => {
-                        const selecionada = iaMetricasSelecionadas[idx] ?? true
-                        return (
-                          <tr key={idx}>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={selecionada}
-                                onChange={() =>
-                                  setIaMetricasSelecionadas((prev) => ({
-                                    ...prev,
-                                    [idx]: !selecionada,
-                                  }))
-                                }
-                                style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
-                              />
-                            </td>
-                            <td style={{ fontWeight: 600 }}>{m.nome_parametro}</td>
-                            <td style={{ color: 'var(--cor-primaria)', fontWeight: 700 }}>
-                              {m.valor_obtido} {m.unidade}
-                            </td>
-                            <td>{m.valor_referencia || '-'}</td>
-                            <td>
-                              <span
-                                className={`badge ${
-                                  m.status_resultado === 'normal'
-                                    ? 'badge-success'
-                                    : 'badge-danger'
-                                }`}
-                              >
-                                {m.status_resultado || 'normal'}
-                              </span>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '20px' }}>
+              {laudoExtraido.exames?.map((ex: any, idx: number) => {
+                const selecionado = examesSelecionados[idx] ?? true
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      border: selecionado ? '2px solid var(--cor-primaria)' : '1px solid var(--borda)',
+                      borderRadius: 'var(--raio-md)',
+                      padding: '16px',
+                      backgroundColor: selecionado ? 'var(--bg-card)' : 'var(--bg-hover)',
+                      opacity: selecionado ? 1 : 0.6,
+                      transition: 'all var(--transicao-rapida)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '1.05rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={selecionado}
+                          onChange={() =>
+                            setExamesSelecionados((prev) => ({
+                              ...prev,
+                              [idx]: !selecionado,
+                            }))
+                          }
+                          style={{ width: '20px', height: '20px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                        />
+                        <span>🩺 {ex.titulo_exame}</span>
+                      </label>
+
+                      <span className="badge badge-primary">
+                        {ex.resultados?.length || 0} parâmetro(s)
+                      </span>
+                    </div>
+
+                    {ex.conclusao_ou_interpretacao && (
+                      <div style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', marginBottom: '10px', padding: '8px 12px', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--raio-sm)' }}>
+                        <strong>Laudo / Impressão:</strong> {ex.conclusao_ou_interpretacao}
+                      </div>
+                    )}
+
+                    {/* Tabela de Resultados do Exame */}
+                    {ex.resultados && ex.resultados.length > 0 && (
+                      <div className="tabela-container" style={{ maxHeight: '180px', overflowY: 'auto' }}>
+                        <table className="tabela" style={{ fontSize: '0.8rem' }}>
+                          <thead>
+                            <tr>
+                              <th>Parâmetro / Analito</th>
+                              <th>Resultado</th>
+                              <th>Referência</th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ex.resultados.map((r: any, rIdx: number) => (
+                              <tr key={rIdx}>
+                                <td style={{ fontWeight: 600 }}>{r.nome_parametro}</td>
+                                <td style={{ color: 'var(--cor-primaria)', fontWeight: 700 }}>
+                                  {r.resultado} {r.unidade || ''}
+                                </td>
+                                <td>{r.valor_referencia || '-'}</td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      r.status_resultado === 'alterado_alto' || r.status_resultado === 'alterado_baixo'
+                                        ? 'badge-danger'
+                                        : 'badge-success'
+                                    }`}
+                                  >
+                                    {r.status_resultado || 'normal'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button type="button" onClick={() => setModalIaAberto(false)} className="btn btn-secondary">
@@ -1337,12 +1463,12 @@ export default function SaudePage() {
               </button>
               <button
                 type="button"
-                onClick={salvarExameIaNoSistema}
-                disabled={salvandoExameIa}
+                onClick={salvarExamesIaNoSistema}
+                disabled={salvandoExamesIa}
                 className="btn btn-primary"
-                style={{ fontWeight: 700 }}
+                style={{ fontWeight: 700, padding: '10px 20px' }}
               >
-                {salvandoExameIa ? 'Salvando...' : '💾 Confirmar e Registrar Tudo'}
+                {salvandoExamesIa ? 'Registrando Todos...' : '💾 Confirmar e Registrar Todos os Exames'}
               </button>
             </div>
           </div>
