@@ -44,6 +44,7 @@ interface Transacao {
   conta_id?: string
   cofrinho_id?: string
   recorrencia_id?: string
+  comprovante_url?: string
 }
 
 interface ItemContracheque {
@@ -750,6 +751,10 @@ export default function FinancasPage() {
         .from('familia-os-documentos')
         .upload(nomeArquivo, arquivoContracheque)
 
+      const { data: urlDataContracheque } = supabase.storage
+        .from('familia-os-documentos')
+        .getPublicUrl(nomeArquivo)
+
       const competencia = dadosContracheque.mes_ano_referencia || 'Competência Recente'
       const fonte = dadosContracheque.fonte_pagadora || 'Empregador'
       const hoje = new Date().toISOString().split('T')[0]
@@ -762,6 +767,7 @@ export default function FinancasPage() {
         data_pagamento: dadosContracheque.data_pagamento || hoje,
         status: 'pago' as const,
         conta_id: contaContrachequeId || null,
+        comprovante_url: urlDataContracheque?.publicUrl || null,
         observacoes: `Bruto: R$ ${dadosContracheque.total_vencimentos.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} | Descontos: R$ ${dadosContracheque.total_descontos.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} | Arquivo: ${nomeArquivo}`,
       }
 
@@ -871,6 +877,10 @@ export default function FinancasPage() {
         .from('familia-os-documentos')
         .upload(nomeArquivo, arquivoDoc)
 
+      const { data: urlDataDoc } = supabase.storage
+        .from('familia-os-documentos')
+        .getPublicUrl(nomeArquivo)
+
       const transacoesParaInserir = dadosDoc.transacoes
         .filter((_, idx) => transacoesSelecionadas.includes(idx))
         .map((t) => {
@@ -889,6 +899,7 @@ export default function FinancasPage() {
             status: (isFatura ? 'pendente' : 'pago') as any,
             conta_id: contaDocId || null,
             recorrencia_id: t.recorrencia_id || null,
+            comprovante_url: urlDataDoc?.publicUrl || null,
             observacoes: `Importado via OCR (${dadosDoc.instituicao || 'Documento'}) | Anexo: ${nomeArquivo}`,
           }
         })
@@ -1428,6 +1439,18 @@ export default function FinancasPage() {
                         <td style={{ fontWeight: 500 }}>
                           {isRecorrente && <span className="badge badge-warning" style={{ marginRight: '6px' }}>Recorrente</span>}
                           {t.descricao}
+                          {t.comprovante_url && (
+                            <a
+                              href={t.comprovante_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn btn-secondary"
+                              style={{ padding: '2px 6px', fontSize: '0.7rem', marginLeft: '8px', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}
+                              title="Visualizar documento ou comprovante original"
+                            >
+                              📄 Anexo
+                            </a>
+                          )}
                         </td>
                         <td>
                           <span style={{ textTransform: 'capitalize' }}>

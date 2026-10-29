@@ -30,6 +30,7 @@ export default function MuralPage() {
   const [descricao, setDescricao] = useState('')
   const [usuarioId, setUsuarioId] = useState('')
   const [dataConquista, setDataConquista] = useState('')
+  const [arquivoFoto, setArquivoFoto] = useState<File | null>(null)
 
   const carregarDados = async () => {
     try {
@@ -55,11 +56,27 @@ export default function MuralPage() {
 
     setSalvando(true)
     try {
+      let urlFoto = null
+      if (arquivoFoto) {
+        const nomeArquivo = `fotos/${Date.now()}_${arquivoFoto.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+        const { error: upErr } = await supabase.storage
+          .from('familia-os-fotos')
+          .upload(nomeArquivo, arquivoFoto, { upsert: true })
+
+        if (!upErr) {
+          const { data: pUrl } = supabase.storage
+            .from('familia-os-fotos')
+            .getPublicUrl(nomeArquivo)
+          urlFoto = pUrl.publicUrl
+        }
+      }
+
       const nova = {
         titulo,
         descricao: descricao || null,
         usuario_id: usuarioId || null,
         data_conquista: dataConquista,
+        caminho_foto: urlFoto,
         total_reacoes: 0
       }
 
@@ -72,6 +89,7 @@ export default function MuralPage() {
         setTitulo('')
         setDescricao('')
         setDataConquista('')
+        setArquivoFoto(null)
       }
     } finally {
       setSalvando(false)
@@ -106,17 +124,17 @@ export default function MuralPage() {
             Mural de Conquistas & Fotos
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Histórico de momentos importantes e vitórias da família.
+            Histórico de momentos importantes, vitórias da família e fotos originais.
           </p>
         </div>
       </div>
 
       <div className="card" style={{ marginBottom: '32px' }}>
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '16px' }}>🌟 Registrar Nova Conquista</h2>
+        <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '16px' }}>🌟 Registrar Nova Conquista / Foto</h2>
         <form onSubmit={handleAdicionar} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', alignItems: 'flex-end' }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">Título da Conquista</label>
-            <input type="text" className="input" placeholder="Ex: Medalha no Judô" value={titulo} onChange={(e) => setTitulo(e.target.value)} required />
+            <input type="text" className="input" placeholder="Ex: Medalha no Judô, Formatura" value={titulo} onChange={(e) => setTitulo(e.target.value)} required />
           </div>
 
           <div className="form-group" style={{ marginBottom: 0 }}>
@@ -132,27 +150,38 @@ export default function MuralPage() {
             <input type="date" className="input" value={dataConquista} onChange={(e) => setDataConquista(e.target.value)} required />
           </div>
 
-          <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-            <label className="form-label">Descrição (Opcional)</label>
-            <textarea className="input" rows={2} placeholder="Detalhes do momento..." value={descricao} onChange={(e) => setDescricao(e.target.value)} />
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Foto do Momento (Opcional)</label>
+            <input
+              type="file"
+              accept="image/*"
+              className="input"
+              style={{ padding: '7px 12px' }}
+              onChange={(e) => setArquivoFoto(e.target.files?.[0] || null)}
+            />
           </div>
 
-          <button type="submit" className="btn btn-primary" disabled={salvando}>
+          <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+            <label className="form-label">Descrição (Opcional)</label>
+            <textarea className="input" rows={2} placeholder="Detalhes da conquista ou do dia..." value={descricao} onChange={(e) => setDescricao(e.target.value)} />
+          </div>
+
+          <button type="submit" className="btn btn-primary" disabled={salvando} style={{ height: '42px', gridColumn: '1 / -1' }}>
             {salvando ? 'Salvando...' : '+ Adicionar ao Mural'}
           </button>
         </form>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
         {conquistas.length === 0 && !carregando ? (
-          <div className="card" style={{ textAlign: 'center', color: 'var(--texto-secundario)' }}>
+          <div className="card" style={{ textAlign: 'center', color: 'var(--texto-secundario)', gridColumn: '1 / -1' }}>
             Nenhuma conquista registrada no mural ainda.
           </div>
         ) : (
           conquistas.map(c => {
             const u = usuarios.find(x => x.id === c.usuario_id)
             return (
-              <div key={c.id} className="card" style={{ borderLeft: '4px solid var(--cor-primaria)', padding: '20px' }}>
+              <div key={c.id} className="card" style={{ borderLeft: '4px solid var(--cor-primaria)', padding: '20px', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
                     <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>{c.titulo}</h3>
@@ -164,18 +193,44 @@ export default function MuralPage() {
                   <button type="button" onClick={() => excluirConquista(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)', fontSize: '1rem' }}>🗑️</button>
                 </div>
 
-                {c.descricao && (
-                  <p style={{ marginTop: '12px', fontSize: '0.95rem' }}>{c.descricao}</p>
+                {c.caminho_foto && (
+                  <div style={{ marginTop: '14px', borderRadius: 'var(--raio-md)', overflow: 'hidden', border: '1px solid var(--borda)' }}>
+                    <a href={c.caminho_foto} target="_blank" rel="noopener noreferrer" title="Clique para abrir foto em tela cheia">
+                      <img
+                        src={c.caminho_foto}
+                        alt={c.titulo}
+                        style={{ width: '100%', maxHeight: '240px', objectFit: 'cover', display: 'block', cursor: 'pointer' }}
+                      />
+                    </a>
+                  </div>
                 )}
 
-                <div style={{ marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <button type="button" onClick={() => adicionarReacao(c.id, c.total_reacoes)} className="btn btn-secondary" style={{ padding: '6px 12px', borderRadius: 'var(--raio-full)' }}>
-                    👏 Parabéns
-                  </button>
-                  {c.total_reacoes > 0 && (
-                    <span style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', fontWeight: 600 }}>
-                      {c.total_reacoes} {c.total_reacoes === 1 ? 'palma' : 'palmas'}
-                    </span>
+                {c.descricao && (
+                  <p style={{ marginTop: '12px', fontSize: '0.95rem', flex: 1 }}>{c.descricao}</p>
+                )}
+
+                <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button type="button" onClick={() => adicionarReacao(c.id, c.total_reacoes)} className="btn btn-secondary" style={{ padding: '6px 12px', borderRadius: 'var(--raio-full)' }}>
+                      👏 Parabéns
+                    </button>
+                    {c.total_reacoes > 0 && (
+                      <span style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', fontWeight: 600 }}>
+                        {c.total_reacoes} {c.total_reacoes === 1 ? 'palma' : 'palmas'}
+                      </span>
+                    )}
+                  </div>
+
+                  {c.caminho_foto && (
+                    <a
+                      href={c.caminho_foto}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn-secondary"
+                      style={{ padding: '4px 10px', fontSize: '0.75rem', textDecoration: 'none' }}
+                    >
+                      🖼️ Ver Foto
+                    </a>
                   )}
                 </div>
               </div>

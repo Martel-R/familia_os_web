@@ -48,6 +48,7 @@ interface ConsultaExame {
   data_agendada: string
   data_retorno?: string
   observacoes?: string
+  link_anexo?: string
   concluido: boolean
 }
 
@@ -128,6 +129,8 @@ export default function SaudePage() {
   const [modalIaAberto, setModalIaAberto] = useState(false)
   const [exameExtraido, setExameExtraido] = useState<any>(null)
   const [salvandoExameIa, setSalvandoExameIa] = useState(false)
+  const [iaLinkAnexo, setIaLinkAnexo] = useState('')
+  const [conArquivo, setConArquivo] = useState<File | null>(null)
 
   // Campos editáveis da extração
   const [iaMembroId, setIaMembroId] = useState('')
@@ -450,6 +453,26 @@ export default function SaudePage() {
     const formData = new FormData()
     formData.append('file', file)
 
+    // 1. Armazenar o documento original no Supabase Storage
+    let urlAnexo = ''
+    try {
+      const nomeLimpo = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const caminhoStorage = `exames/${Date.now()}_${nomeLimpo}`
+      const { error: upErr } = await supabase.storage
+        .from('familia-os-documentos')
+        .upload(caminhoStorage, file, { upsert: true })
+
+      if (!upErr) {
+        const { data: pUrl } = supabase.storage
+          .from('familia-os-documentos')
+          .getPublicUrl(caminhoStorage)
+        urlAnexo = pUrl.publicUrl
+      }
+    } catch (e) {
+      console.error('Erro ao armazenar arquivo do exame:', e)
+    }
+    setIaLinkAnexo(urlAnexo)
+
     try {
       const res = await fetch('/api/ocr/medical-exam', {
         method: 'POST',
@@ -512,6 +535,7 @@ export default function SaudePage() {
         especialista_ou_clinica: iaClinica || null,
         data_agendada: new Date(iaData || new Date()).toISOString(),
         observacoes: obsCompleta || 'Exame importado automaticamente via Inteligência Artificial.',
+        link_anexo: iaLinkAnexo || null,
         concluido: true,
       }
 
@@ -985,6 +1009,7 @@ export default function SaudePage() {
                       <th>Médico / Clínica</th>
                       <th>Data e Hora</th>
                       <th>Retorno</th>
+                      <th>Laudo / Arquivo</th>
                       <th style={{ textAlign: 'right' }}>Ações</th>
                     </tr>
                   </thead>
@@ -1011,6 +1036,22 @@ export default function SaudePage() {
                           <td>{c.especialista_ou_clinica || '-'}</td>
                           <td>{new Date(c.data_agendada).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td>
                           <td>{c.data_retorno ? new Date(c.data_retorno).toLocaleDateString('pt-BR') : '-'}</td>
+                          <td>
+                            {c.link_anexo ? (
+                              <a
+                                href={c.link_anexo}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
+                                title="Visualizar arquivo ou laudo original"
+                              >
+                                📄 Ver Laudo
+                              </a>
+                            ) : (
+                              <span style={{ color: 'var(--texto-secundario)', fontSize: '0.75rem' }}>-</span>
+                            )}
+                          </td>
                           <td style={{ textAlign: 'right' }}>
                             <button type="button" onClick={() => excluirConsulta(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)' }}>🗑️</button>
                           </td>
