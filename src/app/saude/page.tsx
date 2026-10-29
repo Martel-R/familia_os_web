@@ -707,6 +707,28 @@ export default function SaudePage() {
     }
   }
 
+  const formatarResultadoExame = (res: string | null | undefined, titulo?: string) => {
+    if (!res) return '-'
+    let limpo = res
+      .replace(/^Resultados:\s*/i, '')
+      .replace(/^[•\-\s]+/g, '')
+      .trim()
+
+    if (limpo.includes('Resultados:')) {
+      const partes = limpo.split(/Resultados:/i)
+      if (partes[1]) limpo = partes[1].replace(/^[•\-\s]+/g, '').trim()
+    }
+
+    const linhas = limpo.split('\n').map((l) => l.replace(/^[•\-\s]+/g, '').trim()).filter(Boolean)
+    if (linhas.length === 1) {
+      return linhas[0]
+    }
+    if (linhas.length > 1) {
+      return linhas.join(' • ')
+    }
+    return limpo
+  }
+
   // Helper: Criar evento na agenda familiar e sincronizar com Google Calendar
   const criarEventoAgenda = async (titulo: string, dataHora: string, local: string | null, descricao: string) => {
     try {
@@ -1229,23 +1251,23 @@ export default function SaudePage() {
       let totalMetricasInseridas = 0
 
       for (const ex of examesParaSalvar) {
-        const resumoResultados = (ex.resultados || [])
-          .map(
-            (r: any) =>
-              `${r.nome_parametro}: ${r.resultado}${
-                r.unidade ? ' ' + r.unidade : ''
-              }`
-          )
-          .join('\n• ')
+        let resultadoFormatado = ''
+        if (ex.resultados && ex.resultados.length === 1) {
+          const r = ex.resultados[0]
+          resultadoFormatado = `${r.nome_parametro}: ${r.resultado}${r.unidade ? ' ' + r.unidade : ''}`
+        } else if (ex.resultados && ex.resultados.length > 1) {
+          resultadoFormatado = ex.resultados
+            .map((r: any) => `${r.nome_parametro}: ${r.resultado}${r.unidade ? ' ' + r.unidade : ''}`)
+            .join(' • ')
+        } else if (ex.conclusao_ou_interpretacao) {
+          resultadoFormatado = `${ex.titulo_exame || 'Exame'}: ${ex.conclusao_ou_interpretacao}`
+        } else {
+          resultadoFormatado = 'Sem alterações'
+        }
 
         const obsPartes = [
-          ex.conclusao_ou_interpretacao
-            ? `Conclusão: ${ex.conclusao_ou_interpretacao}`
-            : '',
-          laudoExtraido.resumo_geral
-            ? `Resumo Geral do Laudo: ${laudoExtraido.resumo_geral}`
-            : '',
-          resumoResultados ? `Resultados:\n• ${resumoResultados}` : '',
+          ex.conclusao_ou_interpretacao ? `Conclusão: ${ex.conclusao_ou_interpretacao}` : '',
+          laudoExtraido.resumo_geral ? `Resumo Geral do Laudo: ${laudoExtraido.resumo_geral}` : '',
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -1258,8 +1280,8 @@ export default function SaudePage() {
           especialista_ou_clinica: labClinica,
           data_agendada: new Date(dataAgendada).toISOString(),
           status: 'concluido',
-          resultado: obsPartes || 'Resultados extraídos via Inteligência Artificial.',
-          observacoes: ex.conclusao_ou_interpretacao || laudoExtraido.resumo_geral || null,
+          resultado: resultadoFormatado,
+          observacoes: obsPartes || null,
           link_anexo: iaLinkAnexo || null,
           concluido: true,
         }
@@ -2285,18 +2307,35 @@ export default function SaudePage() {
                               <td
                                 onClick={() => setConsultaDetalhes(c)}
                                 style={{
-                                  maxWidth: '220px',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                  fontSize: '0.8rem',
-                                  color: c.tipo === 'exame' && c.resultado ? 'var(--cor-primaria)' : 'var(--texto-secundario)',
-                                  fontWeight: c.tipo === 'exame' && c.resultado ? 600 : 400,
+                                  maxWidth: '300px',
+                                  fontSize: '0.85rem',
                                   cursor: 'pointer',
                                 }}
                                 title={c.tipo === 'exame' ? (c.resultado || 'Sem resultado registrado') : 'Não se aplica a consultas'}
                               >
-                                {c.tipo === 'exame' ? (c.resultado || '-') : '-'}
+                                {c.tipo === 'exame' ? (
+                                  c.resultado ? (
+                                    <div
+                                      style={{
+                                        fontWeight: 700,
+                                        color: '#047857',
+                                        backgroundColor: '#ecfdf5',
+                                        border: '1px solid #a7f3d0',
+                                        borderRadius: '6px',
+                                        padding: '4px 8px',
+                                        display: 'inline-block',
+                                        lineHeight: '1.3',
+                                        wordBreak: 'break-word',
+                                      }}
+                                    >
+                                      {formatarResultadoExame(c.resultado, c.titulo)}
+                                    </div>
+                                  ) : (
+                                    <span style={{ color: 'var(--texto-secundario)' }}>-</span>
+                                  )
+                                ) : (
+                                  <span style={{ color: 'var(--texto-secundario)' }}>-</span>
+                                )}
                               </td>
 
                               <td style={{ textAlign: 'right' }}>
