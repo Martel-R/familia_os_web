@@ -122,6 +122,21 @@ export default function SaudePage() {
   const [metObs, setMetObs] = useState('')
   const [salvandoMetrica, setSalvandoMetrica] = useState(false)
 
+  // Estados para Importação de Exames com IA
+  const [arquivoIa, setArquivoIa] = useState<File | null>(null)
+  const [processandoIa, setProcessandoIa] = useState(false)
+  const [modalIaAberto, setModalIaAberto] = useState(false)
+  const [exameExtraido, setExameExtraido] = useState<any>(null)
+  const [salvandoExameIa, setSalvandoExameIa] = useState(false)
+
+  // Campos editáveis da extração
+  const [iaMembroId, setIaMembroId] = useState('')
+  const [iaTitulo, setIaTitulo] = useState('')
+  const [iaClinica, setIaClinica] = useState('')
+  const [iaData, setIaData] = useState('')
+  const [iaConclusao, setIaConclusao] = useState('')
+  const [iaMetricasSelecionadas, setIaMetricasSelecionadas] = useState<{ [index: number]: boolean }>({})
+
   const emojisHumor = [
     { nivel: 1, label: 'Muito Mal', emoji: '😢' },
     { nivel: 2, label: 'Para Baixo', emoji: '😕' },
@@ -425,6 +440,123 @@ export default function SaudePage() {
     }
   }
 
+  // --- OCR / IA: EXTRAÇÃO AUTOMÁTICA DE EXAME MÉDICO ---
+  const handleUploadExameIa = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setArquivoIa(file)
+    setProcessandoIa(true)
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const res = await fetch('/api/ocr/medical-exam', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Erro ao analisar exame.')
+
+      setExameExtraido(data)
+      setIaTitulo(data.titulo_exame || 'Exame Médico')
+      setIaClinica(data.laboratorio_ou_clinica || '')
+      setIaData(data.data_exame || new Date().toISOString().split('T')[0])
+      setIaConclusao(data.conclusao_ou_diagnostico || '')
+
+      if (data.paciente_nome && usuarios.length > 0) {
+        const achou = usuarios.find((u) =>
+          data.paciente_nome.toLowerCase().includes(u.nome.toLowerCase()) ||
+          u.nome.toLowerCase().includes(data.paciente_nome.toLowerCase())
+        )
+        setIaMembroId(achou ? achou.id : usuarios[0].id)
+      } else if (usuarios.length > 0) {
+        setIaMembroId(usuarios[0].id)
+      }
+
+      const selecionadas: { [index: number]: boolean } = {}
+      if (data.metricas && Array.isArray(data.metricas)) {
+        data.metricas.forEach((_: any, idx: number) => {
+          selecionadas[idx] = true
+        })
+      }
+      setIaMetricasSelecionadas(selecionadas)
+      setModalIaAberto(true)
+    } catch (err: any) {
+      alert('Erro na extração com IA: ' + err.message)
+    } finally {
+      setProcessandoIa(false)
+      e.target.value = ''
+    }
+  }
+
+  const salvarExameIaNoSistema = async () => {
+    if (!iaMembroId || !iaTitulo || salvandoExameIa) return
+    setSalvandoExameIa(true)
+    try {
+      const resumoMetricas = exameExtraido?.metricas
+        ?.map((m: any) => `${m.nome_parametro}: ${m.valor_obtido} ${m.unidade}`)
+        .join(', ')
+
+      const obsCompleta = [
+        iaConclusao ? `Conclusão do Laudo: ${iaConclusao}` : '',
+        resumoMetricas ? `Métricas identificadas: ${resumoMetricas}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+
+      const payloadExame = {
+        usuario_id: iaMembroId,
+        tipo: 'exame',
+        titulo: iaTitulo,
+        especialista_ou_clinica: iaClinica || null,
+        data_agendada: new Date(iaData || new Date()).toISOString(),
+        observacoes: obsCompleta || 'Exame importado automaticamente via Inteligência Artificial.',
+        concluido: true,
+      }
+
+      await supabase.from('saude_consultas_exames').insert([payloadExame])
+
+      if (exameExtraido?.metricas && Array.isArray(exameExtraido.metricas)) {
+        const metricasParaInserir = exameExtraido.metricas
+          .filter((_: any, idx: number) => iaMetricasSelecionadas[idx])
+          .map((m: any) => {
+            let tipoNormalizado: 'pressao' | 'glicemia' | 'peso' | 'altura' | 'temperatura' = 'glicemia'
+            const lowerNome = (m.nome_parametro || '').toLowerCase()
+            const lowerTipo = (m.tipo_metrica || '').toLowerCase()
+
+            if (lowerTipo.includes('press') || lowerNome.includes('press')) tipoNormalizado = 'pressao'
+            else if (lowerTipo.includes('peso') || lowerNome.includes('peso')) tipoNormalizado = 'peso'
+            else if (lowerTipo.includes('altur') || lowerNome.includes('estatura')) tipoNormalizado = 'altura'
+            else if (lowerTipo.includes('temp') || lowerNome.includes('febre')) tipoNormalizado = 'temperatura'
+            else tipoNormalizado = 'glicemia'
+
+            return {
+              usuario_id: iaMembroId,
+              tipo_metrica: tipoNormalizado,
+              valor_principal: parseFloat(m.valor_obtido) || 0,
+              unidade: m.unidade || '',
+              observacao: `${m.nome_parametro} (Ref: ${m.valor_referencia || 'N/A'}) - Laudo IA`,
+              data_medicao: new Date(iaData || new Date()).toISOString(),
+            }
+          })
+
+        if (metricasParaInserir.length > 0) {
+          await supabase.from('saude_metricas_vitais').insert(metricasParaInserir)
+        }
+      }
+
+      await carregarDados()
+      setModalIaAberto(false)
+      setExameExtraido(null)
+      alert('🎉 Exame e métricas laboratoriais registrados com sucesso no sistema!')
+    } catch (err: any) {
+      alert('Erro ao salvar exame: ' + err.message)
+    } finally {
+      setSalvandoExameIa(false)
+    }
+  }
+
   return (
     <div>
       {/* Topo / Header */}
@@ -434,18 +566,36 @@ export default function SaudePage() {
             Saúde Integral & Bem-Estar Familiar
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Check-in diário, medicamentos, vacinas, exames, diário de métricas e atendimento SOS.
+            Check-in diário, medicamentos, vacinas, exames com IA, métricas e atendimento SOS.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setModalSosAberto(true)}
-          className="btn btn-danger"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 700 }}
-        >
-          🚨 MODO SOS (Emergência)
-        </button>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="file"
+            id="upload-exame-ia"
+            accept="image/*,application/pdf"
+            style={{ display: 'none' }}
+            onChange={handleUploadExameIa}
+            disabled={processandoIa}
+          />
+          <label
+            htmlFor="upload-exame-ia"
+            className="btn btn-primary"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', cursor: 'pointer', fontWeight: 600 }}
+          >
+            {processandoIa ? '🤖 Analisando com IA...' : '🔬 + Importar Exame (IA)'}
+          </label>
+
+          <button
+            type="button"
+            onClick={() => setModalSosAberto(true)}
+            className="btn btn-danger"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 700 }}
+          >
+            🚨 MODO SOS (Emergência)
+          </button>
+        </div>
       </div>
 
       {/* Check-in Diário de Humor (Visível em destaque) */}
@@ -1024,6 +1174,134 @@ export default function SaudePage() {
             <div style={{ marginTop: '24px', textAlign: 'right' }}>
               <button type="button" onClick={() => setModalSosAberto(false)} className="btn btn-secondary">
                 Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL DE REVISÃO E CONFIRMAÇÃO DO EXAME IA               */}
+      {/* ======================================================== */}
+      {modalIaAberto && exameExtraido && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10001, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '750px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.75rem' }}>🤖</span>
+                <div>
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--cor-primaria)' }}>Exame Interpretado com IA</h2>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)' }}>Revise os dados extraídos pelo Gemini 2.5 Flash antes de registrar no sistema.</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setModalIaAberto(false)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Membro da Família</label>
+                <select className="input" value={iaMembroId} onChange={(e) => setIaMembroId(e.target.value)}>
+                  {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Título do Exame</label>
+                <input type="text" className="input" value={iaTitulo} onChange={(e) => setIaTitulo(e.target.value)} required />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Laboratório / Clínica</label>
+                <input type="text" className="input" value={iaClinica} onChange={(e) => setIaClinica(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Data do Exame</label>
+                <input type="date" className="input" value={iaData} onChange={(e) => setIaData(e.target.value)} required />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <label className="form-label">Conclusão / Laudo do Médico</label>
+                <textarea className="input" rows={2} value={iaConclusao} onChange={(e) => setIaConclusao(e.target.value)} />
+              </div>
+            </div>
+
+            {/* Tabela de Métricas Extraídas */}
+            {exameExtraido.metricas && exameExtraido.metricas.length > 0 && (
+              <div style={{ marginBottom: '20px' }}>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '8px' }}>
+                  📊 Métricas & Parâmetros Identificados ({exameExtraido.metricas.length}):
+                </h3>
+                <p style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginBottom: '8px' }}>
+                  Desmarque os itens que não deseja registrar no diário de métricas vitais.
+                </p>
+
+                <div className="tabela-container" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                  <table className="tabela">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '40px' }}>Incluir</th>
+                        <th>Parâmetro</th>
+                        <th>Resultado</th>
+                        <th>Referência</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {exameExtraido.metricas.map((m: any, idx: number) => {
+                        const selecionada = iaMetricasSelecionadas[idx] ?? true
+                        return (
+                          <tr key={idx}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={selecionada}
+                                onChange={() =>
+                                  setIaMetricasSelecionadas((prev) => ({
+                                    ...prev,
+                                    [idx]: !selecionada,
+                                  }))
+                                }
+                                style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                              />
+                            </td>
+                            <td style={{ fontWeight: 600 }}>{m.nome_parametro}</td>
+                            <td style={{ color: 'var(--cor-primaria)', fontWeight: 700 }}>
+                              {m.valor_obtido} {m.unidade}
+                            </td>
+                            <td>{m.valor_referencia || '-'}</td>
+                            <td>
+                              <span
+                                className={`badge ${
+                                  m.status_resultado === 'normal'
+                                    ? 'badge-success'
+                                    : 'badge-danger'
+                                }`}
+                              >
+                                {m.status_resultado || 'normal'}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" onClick={() => setModalIaAberto(false)} className="btn btn-secondary">
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={salvarExameIaNoSistema}
+                disabled={salvandoExameIa}
+                className="btn btn-primary"
+                style={{ fontWeight: 700 }}
+              >
+                {salvandoExameIa ? 'Salvando...' : '💾 Confirmar e Registrar Tudo'}
               </button>
             </div>
           </div>
