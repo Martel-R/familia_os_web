@@ -81,6 +81,15 @@ interface MetricaVital {
   data_medicao: string
 }
 
+interface CheckinHumor {
+  id: string
+  usuario_id: string
+  nivel_humor: number
+  motivo?: string
+  notas_diario?: string
+  criado_em: string
+}
+
 export default function SaudePage() {
   const [abaAtiva, setAbaAtiva] = useState<'geral' | 'medicamentos' | 'vacinas' | 'consultas' | 'metricas'>('geral')
   const [modalSosAberto, setModalSosAberto] = useState(false)
@@ -89,14 +98,26 @@ export default function SaudePage() {
   const [usuarioLogadoId, setUsuarioLogadoId] = useState<string>('')
   const [carregando, setCarregando] = useState(true)
 
-  // Dados
+  // Dados e Check-in de Humor Avançado
   const [humorSelecionado, setHumorSelecionado] = useState<number | null>(null)
+  const [motivoHumor, setMotivoHumor] = useState('')
   const [salvandoHumor, setSalvandoHumor] = useState(false)
+  const [historicoCheckins, setHistoricoCheckins] = useState<CheckinHumor[]>([])
+  const [modalHistoricoHumorAberto, setModalHistoricoHumorAberto] = useState(false)
+
   const [fichas, setFichas] = useState<FichaMedica[]>([])
   const [medicamentos, setMedicamentos] = useState<Medicamento[]>([])
   const [vacinas, setVacinas] = useState<Vacina[]>([])
   const [consultas, setConsultas] = useState<ConsultaExame[]>([])
   const [metricas, setMetricas] = useState<MetricaVital[]>([])
+
+  // Paginação e Ações em Lote para Consultas e Exames
+  const [paginaAtualConsultas, setPaginaAtualConsultas] = useState(1)
+  const itensPorPaginaConsultas = 10
+  const [selecionadosConsultas, setSelecionadosConsultas] = useState<{ [id: string]: boolean }>({})
+  const [modalAlterarMembroLoteAberto, setModalAlterarMembroLoteAberto] = useState(false)
+  const [novoMembroLoteId, setNovoMembroLoteId] = useState('')
+  const [executandoAcaoLote, setExecutandoAcaoLote] = useState(false)
 
   // Formulário Ficha
   const [fichaUsuarioId, setFichaUsuarioId] = useState('')
@@ -248,13 +269,14 @@ export default function SaudePage() {
         }
       }
 
-      const [resFichas, resMeds, resVacinas, resConsultas, resMetricas, resContatos] = await Promise.all([
+      const [resFichas, resMeds, resVacinas, resConsultas, resMetricas, resContatos, resCheckins] = await Promise.all([
         supabase.from('saude_fichas_medicas').select('*'),
         supabase.from('saude_medicamentos').select('*').order('horario'),
         supabase.from('saude_vacinacao').select('*').order('data_aplicacao', { ascending: false }),
-        supabase.from('saude_consultas_exames').select('*').order('data_agendada', { ascending: true }),
+        supabase.from('saude_consultas_exames').select('*').order('data_agendada', { ascending: false }),
         supabase.from('saude_metricas_vitais').select('*').order('data_medicao', { ascending: false }),
         supabase.from('agenda_contatos').select('id, nome, especialidade, telefone, email').order('nome'),
+        supabase.from('saude_checkins').select('*').order('criado_em', { ascending: false }).limit(40),
       ])
 
       if (resFichas.data) setFichas(resFichas.data)
@@ -263,17 +285,12 @@ export default function SaudePage() {
       if (resConsultas.data) setConsultas(resConsultas.data)
       if (resMetricas.data) setMetricas(resMetricas.data)
       if (resContatos.data) setContatosAgenda(resContatos.data)
-
-      if (usuarioLogadoId) {
-        const { data: checkins } = await supabase
-          .from('saude_checkins')
-          .select('nivel_humor')
-          .eq('usuario_id', usuarioLogadoId)
-          .order('criado_em', { ascending: false })
-          .limit(1)
-
-        if (checkins && checkins.length > 0) {
-          setHumorSelecionado(checkins[0].nivel_humor)
+      if (resCheckins.data) {
+        setHistoricoCheckins(resCheckins.data)
+        const meuUltimo = usuarioLogadoId ? resCheckins.data.find((c: any) => c.usuario_id === usuarioLogadoId) : resCheckins.data[0]
+        if (meuUltimo) {
+          setHumorSelecionado(meuUltimo.nivel_humor)
+          setMotivoHumor(meuUltimo.motivo || meuUltimo.notas_diario || '')
         }
       }
     } finally {
@@ -285,15 +302,119 @@ export default function SaudePage() {
     carregarDados()
   }, [usuarioLogadoId])
 
-  // --- REGISTRAR HUMOR ---
-  const registrarHumor = async (nivel: number) => {
-    if (!usuarioLogadoId) return alert('Você precisa estar autenticado para registrar humor.')
-    setHumorSelecionado(nivel)
+  // --- REGISTRAR HUMOR & HISTÓRICO ---
+  const registrarHumor = async (nivel?: number) => {
+    const alvoNivel = nivel !== undefined ? nivel : humorSelecionado
+    if (!alvoNivel) return alert('Por favor, selecione um emoji para o seu humor.')
+
+    const userFinalId = usuarioLogadoId || (usuarios.length > 0 ? usuarios[0].id : null)
+    if (!userFinalId) return alert('Nenhum usuário identificado para salvar o check-in.')
+
+    setHumorSelecionado(alvoNivel)
     setSalvandoHumor(true)
     try {
-      await supabase.from('saude_checkins').insert([{ usuario_id: usuarioLogadoId, nivel_humor: nivel }])
+      const payload = {
+        usuario_id: userFinalId,
+        nivel_humor: alvoNivel,
+        motivo: motivoHumor.trim() || null,
+        notas_diario: motivoHumor.trim() || null,
+      }
+      const { error } = await supabase.from('saude_checkins').insert([payload])
+      if (error) throw error
+      await carregarDados()
+      alert('☀️ Check-in de humor registrado com sucesso!')
+    } catch (err: any) {
+      alert('Erro ao registrar humor: ' + err.message)
     } finally {
       setSalvandoHumor(false)
+    }
+  }
+
+  const excluirCheckinHumor = async (id: string) => {
+    if (!confirm('Deseja excluir este registro de humor?')) return
+    try {
+      await supabase.from('saude_checkins').delete().eq('id', id)
+      setHistoricoCheckins((prev) => prev.filter((c) => c.id !== id))
+    } catch (err: any) {
+      alert('Erro ao excluir: ' + err.message)
+    }
+  }
+
+  // --- AÇÕES EM LOTE PARA CONSULTAS E EXAMES ---
+  const idsConsultasSelecionados = Object.keys(selecionadosConsultas).filter((id) => selecionadosConsultas[id])
+
+  const executarAcaoLote = async (acao: 'excluir' | 'concluir' | 'agendar') => {
+    if (idsConsultasSelecionados.length === 0 || executandoAcaoLote) return
+
+    if (acao === 'excluir') {
+      if (!confirm(`Tem certeza que deseja excluir ${idsConsultasSelecionados.length} exames/consultas selecionados?`)) {
+        return
+      }
+      setExecutandoAcaoLote(true)
+      try {
+        const { error } = await supabase.from('saude_consultas_exames').delete().in('id', idsConsultasSelecionados)
+        if (error) throw error
+        setConsultas((prev) => prev.filter((c) => !idsConsultasSelecionados.includes(c.id)))
+        setSelecionadosConsultas({})
+        alert(`🗑️ ${idsConsultasSelecionados.length} registros excluídos com sucesso!`)
+      } catch (err: any) {
+        alert('Erro ao excluir em lote: ' + err.message)
+      } finally {
+        setExecutandoAcaoLote(false)
+      }
+    } else if (acao === 'concluir') {
+      setExecutandoAcaoLote(true)
+      try {
+        const { error } = await supabase
+          .from('saude_consultas_exames')
+          .update({ status: 'concluido', concluido: true })
+          .in('id', idsConsultasSelecionados)
+        if (error) throw error
+        await carregarDados()
+        setSelecionadosConsultas({})
+        alert(`✅ ${idsConsultasSelecionados.length} registros marcados como Concluído!`)
+      } catch (err: any) {
+        alert('Erro ao atualizar em lote: ' + err.message)
+      } finally {
+        setExecutandoAcaoLote(false)
+      }
+    } else if (acao === 'agendar') {
+      setExecutandoAcaoLote(true)
+      try {
+        const { error } = await supabase
+          .from('saude_consultas_exames')
+          .update({ status: 'agendado', concluido: false })
+          .in('id', idsConsultasSelecionados)
+        if (error) throw error
+        await carregarDados()
+        setSelecionadosConsultas({})
+        alert(`🗓️ ${idsConsultasSelecionados.length} registros marcados como Agendado!`)
+      } catch (err: any) {
+        alert('Erro ao atualizar em lote: ' + err.message)
+      } finally {
+        setExecutandoAcaoLote(false)
+      }
+    }
+  }
+
+  const executarAlterarMembroLote = async (novoMembroId: string) => {
+    if (idsConsultasSelecionados.length === 0 || !novoMembroId || executandoAcaoLote) return
+    setExecutandoAcaoLote(true)
+    try {
+      const { error } = await supabase
+        .from('saude_consultas_exames')
+        .update({ usuario_id: novoMembroId })
+        .in('id', idsConsultasSelecionados)
+      if (error) throw error
+      await carregarDados()
+      setSelecionadosConsultas({})
+      setModalAlterarMembroLoteAberto(false)
+      const nomeMembro = usuarios.find((u) => u.id === novoMembroId)?.nome || 'Membro'
+      alert(`👤 ${idsConsultasSelecionados.length} registros transferidos para ${nomeMembro} com sucesso!`)
+    } catch (err: any) {
+      alert('Erro ao transferir membro em lote: ' + err.message)
+    } finally {
+      setExecutandoAcaoLote(false)
     }
   }
 
@@ -1164,7 +1285,7 @@ export default function SaudePage() {
   }
 
   return (
-    <div>
+    <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', boxSizing: 'border-box' }}>
       {/* Topo / Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
@@ -1204,39 +1325,93 @@ export default function SaudePage() {
         </div>
       </div>
 
-      {/* Check-in Diário de Humor (Visível em destaque) */}
-      <div className="card" style={{ marginBottom: '24px' }}>
-        <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '6px' }}>Como você está se sentindo hoje?</h2>
-        <p style={{ color: 'var(--texto-secundario)', fontSize: '0.8rem', marginBottom: '16px' }}>
-          {salvandoHumor ? 'Registrando seu sentimento no banco...' : 'Clique em um emoji para salvar o registro do dia no histórico.'}
-        </p>
+      {/* Check-in Diário de Humor & Bem-Estar Familiar (UX/UI Moderno) */}
+      <div className="card" style={{ marginBottom: '24px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--borda)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
+          <div>
+            <h2 style={{ fontSize: '1.15rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>☀️</span> Check-in Diário de Humor & Bem-Estar
+            </h2>
+            <p style={{ color: 'var(--texto-secundario)', fontSize: '0.85rem', marginTop: '2px' }}>
+              Como você e sua família estão se sentindo hoje? Compartilhe seu sentimento e o motivo.
+            </p>
+          </div>
 
-        <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => setModalHistoricoHumorAberto(true)}
+            className="btn btn-secondary"
+            style={{ padding: '6px 14px', fontSize: '0.8rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            📊 Histórico de Humor ({historicoCheckins.length})
+          </button>
+        </div>
+
+        {/* Emojis Interativos */}
+        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
           {emojisHumor.map((item) => {
             const selecionado = humorSelecionado === item.nivel
             return (
               <button
                 key={item.nivel}
                 type="button"
-                onClick={() => registrarHumor(item.nivel)}
+                onClick={() => setHumorSelecionado(item.nivel)}
                 style={{
+                  flex: '1 1 90px',
+                  minWidth: '85px',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
                   gap: '6px',
-                  padding: '12px 18px',
+                  padding: '12px 10px',
                   borderRadius: 'var(--raio-lg)',
                   border: selecionado ? '2px solid var(--cor-primaria)' : '1px solid var(--borda)',
-                  backgroundColor: selecionado ? 'var(--cor-primaria-suave)' : 'var(--bg-card)',
+                  backgroundColor: selecionado ? 'var(--cor-primaria-suave)' : 'var(--bg-hover)',
                   cursor: 'pointer',
-                  transition: 'all var(--transicao-rapida)',
+                  transform: selecionado ? 'scale(1.04)' : 'scale(1)',
+                  transition: 'all 0.15s ease',
+                  boxShadow: selecionado ? '0 2px 8px rgba(0,0,0,0.08)' : 'none',
                 }}
               >
-                <span style={{ fontSize: '1.8rem' }}>{item.emoji}</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{item.label}</span>
+                <span style={{ fontSize: '2rem' }}>{item.emoji}</span>
+                <span style={{ fontSize: '0.75rem', fontWeight: selecionado ? 700 : 500, color: selecionado ? 'var(--cor-primaria)' : 'var(--texto-principal)' }}>
+                  {item.label}
+                </span>
               </button>
             )
           })}
+        </div>
+
+        {/* Campo de Motivação & Salvar */}
+        <div style={{ paddingTop: '12px', borderTop: '1px solid var(--borda)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--texto-principal)' }}>
+            💭 O que motivou o seu sentimento hoje? (Opcional)
+          </label>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              className="input"
+              placeholder="Ex: Dormi muito bem, passeio com a família, estresse no trabalho, dor de cabeça..."
+              value={motivoHumor}
+              onChange={(e) => setMotivoHumor(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  registrarHumor()
+                }
+              }}
+              style={{ flex: 1, minWidth: '220px' }}
+            />
+            <button
+              type="button"
+              onClick={() => registrarHumor()}
+              disabled={salvandoHumor}
+              className="btn btn-primary"
+              style={{ padding: '8px 20px', fontWeight: 700, whiteSpace: 'nowrap' }}
+            >
+              {salvandoHumor ? 'Salvando...' : '💾 Salvar Check-in'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1782,281 +1957,449 @@ export default function SaudePage() {
           </div>
 
           <div className="card">
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px' }}>Agenda de Consultas e Exames</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Agenda de Consultas e Exames</h3>
+              <div style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)' }}>
+                Total: <strong>{consultas.length}</strong> registros
+              </div>
+            </div>
+
+            {/* Barra de Ações em Lote */}
+            {idsConsultasSelecionados.length > 0 && (
+              <div
+                style={{
+                  backgroundColor: 'var(--cor-primaria-suave)',
+                  border: '1px solid var(--cor-primaria)',
+                  borderRadius: 'var(--raio-md)',
+                  padding: '12px 16px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: 'var(--cor-primaria)' }}>
+                  <span>📦</span>
+                  <span>
+                    {idsConsultasSelecionados.length}{' '}
+                    {idsConsultasSelecionados.length === 1 ? 'item selecionado' : 'itens selecionados'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNovoMembroLoteId(usuarios.length > 0 ? usuarios[0].id : '')
+                      setModalAlterarMembroLoteAberto(true)
+                    }}
+                    className="btn btn-primary"
+                    style={{ padding: '6px 14px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    👤 Alterar Membro ({idsConsultasSelecionados.length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => executarAcaoLote('concluir')}
+                    disabled={executandoAcaoLote}
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '0.8rem', color: 'var(--cor-sucesso)', fontWeight: 600 }}
+                  >
+                    ✅ Marcar Concluído
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => executarAcaoLote('agendar')}
+                    disabled={executandoAcaoLote}
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#1d4ed8', fontWeight: 600 }}
+                  >
+                    🗓️ Marcar Agendado
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => executarAcaoLote('excluir')}
+                    disabled={executandoAcaoLote}
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '0.8rem', color: 'var(--cor-perigo)', fontWeight: 600 }}
+                  >
+                    🗑️ Excluir Selecionados
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelecionadosConsultas({})}
+                    style={{ background: 'none', border: 'none', color: 'var(--texto-secundario)', fontSize: '0.8rem', cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    Desmarcar todos
+                  </button>
+                </div>
+              </div>
+            )}
+
             {consultas.length === 0 ? (
               <div style={{ textAlign: 'center', color: 'var(--texto-secundario)', padding: '24px' }}>
                 Nenhum agendamento pendente.
               </div>
             ) : (
-              <div className="tabela-container">
-                <table className="tabela">
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Membro</th>
-                      <th>Tipo</th>
-                      <th>Especialidade / Título</th>
-                      <th>Médico / Clínica</th>
-                      <th>Data e Hora</th>
-                      <th>Retorno</th>
-                      <th>Resultado (Exame)</th>
-                      <th>Observações / Conduta (Consulta)</th>
-                      <th>Laudo / Arquivo</th>
-                      <th style={{ textAlign: 'right' }}>Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {consultas.map((c) => {
-                      const u = usuarios.find((x) => x.id === c.usuario_id)
-                      const contato = contatosAgenda.find((x) => x.id === c.contato_id)
-                      const dataValida = c.data_agendada ? new Date(c.data_agendada) : null
-                      const jaPassou = dataValida ? dataValida <= new Date() : false
+              (() => {
+                const totalPaginasConsultas = Math.ceil(consultas.length / itensPorPaginaConsultas) || 1
+                const consultasPaginadas = consultas.slice(
+                  (paginaAtualConsultas - 1) * itensPorPaginaConsultas,
+                  paginaAtualConsultas * itensPorPaginaConsultas
+                )
 
-                      return (
-                        <tr key={c.id}>
-                          <td>
-                            {c.status === 'a_agendar' && (
-                              <button
-                                type="button"
-                                onClick={() => abrirModalAgendar(c)}
-                                className="btn"
-                                style={{
-                                  backgroundColor: '#fff7ed',
-                                  color: '#c2410c',
-                                  border: '1px solid #fdba74',
-                                  padding: '4px 10px',
-                                  fontSize: '0.75rem',
-                                  fontWeight: 700,
-                                  borderRadius: '9999px',
-                                  cursor: 'pointer',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  whiteSpace: 'nowrap',
-                                }}
-                                title="Clique para agendar com o médico e adicionar ao calendário"
-                              >
-                                📅 A Agendar
-                              </button>
-                            )}
+                const todosPaginaMarcados =
+                  consultasPaginadas.length > 0 &&
+                  consultasPaginadas.every((c) => selecionadosConsultas[c.id])
 
-                            {c.status === 'agendado' && (
-                              <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => abrirModalConfirmar(c)}
-                                  className="btn"
-                                  style={{
-                                    backgroundColor: '#eff6ff',
-                                    color: '#1d4ed8',
-                                    border: '1px solid #93c5fd',
-                                    padding: '4px 10px',
-                                    fontSize: '0.75rem',
-                                    fontWeight: 700,
-                                    borderRadius: '9999px',
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px',
-                                    whiteSpace: 'nowrap',
+                return (
+                  <div className="tabela-container" style={{ overflowX: 'auto', width: '100%', maxWidth: '100%' }}>
+                    <table className="tabela" style={{ minWidth: '850px' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '40px', textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={todosPaginaMarcados}
+                              onChange={(e) => {
+                                const marcar = e.target.checked
+                                const novo = { ...selecionadosConsultas }
+                                consultasPaginadas.forEach((c) => {
+                                  novo[c.id] = marcar
+                                })
+                                setSelecionadosConsultas(novo)
+                              }}
+                              style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                              title="Selecionar todos desta página"
+                            />
+                          </th>
+                          <th>Status</th>
+                          <th>Membro</th>
+                          <th>Tipo</th>
+                          <th>Especialidade / Título</th>
+                          <th>Médico / Clínica</th>
+                          <th>Data e Hora</th>
+                          <th>Retorno</th>
+                          <th>Resultado (Exame)</th>
+                          <th>Observações / Conduta (Consulta)</th>
+                          <th>Laudo / Arquivo</th>
+                          <th style={{ textAlign: 'right' }}>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {consultasPaginadas.map((c) => {
+                          const u = usuarios.find((x) => x.id === c.usuario_id)
+                          const contato = contatosAgenda.find((x) => x.id === c.contato_id)
+                          const dataValida = c.data_agendada ? new Date(c.data_agendada) : null
+                          const jaPassou = dataValida ? dataValida <= new Date() : false
+                          const estaMarcado = !!selecionadosConsultas[c.id]
+
+                          return (
+                            <tr key={c.id} style={{ backgroundColor: estaMarcado ? 'var(--cor-primaria-suave)' : undefined }}>
+                              <td style={{ textAlign: 'center' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={estaMarcado}
+                                  onChange={(e) => {
+                                    setSelecionadosConsultas({ ...selecionadosConsultas, [c.id]: e.target.checked })
                                   }}
-                                  title="Consulta com data marcada. Clique para confirmar a realização."
-                                >
-                                  🗓️ Agendado
-                                </button>
-                                {jaPassou && (
+                                  style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-primaria)' }}
+                                />
+                              </td>
+                              <td>
+                                {c.status === 'a_agendar' && (
                                   <button
                                     type="button"
-                                    onClick={() => abrirModalConfirmar(c)}
+                                    onClick={() => abrirModalAgendar(c)}
+                                    className="btn"
                                     style={{
-                                      background: 'none',
-                                      border: 'none',
-                                      color: 'var(--cor-sucesso)',
-                                      fontSize: '0.7rem',
+                                      backgroundColor: '#fff7ed',
+                                      color: '#c2410c',
+                                      border: '1px solid #fdba74',
+                                      padding: '4px 10px',
+                                      fontSize: '0.75rem',
                                       fontWeight: 700,
+                                      borderRadius: '9999px',
                                       cursor: 'pointer',
-                                      padding: 0,
-                                      textDecoration: 'underline',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      whiteSpace: 'nowrap',
                                     }}
-                                    title="Data da consulta alcançada! Clique para confirmar que compareceu."
+                                    title="Clique para agendar com o médico e adicionar ao calendário"
                                   >
-                                    ⚠️ Confirmar Realização
+                                    📅 A Agendar
                                   </button>
                                 )}
-                              </div>
-                            )}
 
-                            {c.status === 'concluido' && (
-                              <span
-                                style={{
-                                  backgroundColor: '#ecfdf5',
-                                  color: '#047857',
-                                  border: '1px solid #6ee7b7',
-                                  padding: '4px 10px',
-                                  fontSize: '0.75rem',
-                                  fontWeight: 700,
-                                  borderRadius: '9999px',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  whiteSpace: 'nowrap',
-                                }}
-                                title="Consulta/Exame realizada com sucesso"
-                              >
-                                ✅ Concluído
-                              </span>
-                            )}
-                          </td>
-                          <td style={{ fontWeight: 600 }}>{u?.nome || 'Membro'}</td>
-                          <td>
-                            <span className={`badge ${c.tipo === 'consulta' ? 'badge-primary' : 'badge-secondary'}`}>
-                              {c.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}
-                            </span>
-                          </td>
-                          <td style={{ textDecoration: c.status === 'concluido' ? 'line-through' : 'none', fontWeight: 600 }}>{c.titulo}</td>
-                          <td>
-                            <div>
-                              <span>{c.especialista_ou_clinica || '-'}</span>
-                              {contato?.telefone && (
-                                <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
-                                  <a
-                                    href={`tel:${contato.telefone.replace(/\D/g, '')}`}
-                                    style={{ fontSize: '0.75rem', color: 'var(--cor-primaria)', textDecoration: 'none' }}
-                                    title={`Ligar para ${contato.telefone}`}
+                                {c.status === 'agendado' && (
+                                  <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => abrirModalConfirmar(c)}
+                                      className="btn"
+                                      style={{
+                                        backgroundColor: '#eff6ff',
+                                        color: '#1d4ed8',
+                                        border: '1px solid #93c5fd',
+                                        padding: '4px 10px',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 700,
+                                        borderRadius: '9999px',
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                      title="Consulta com data marcada. Clique para confirmar a realização."
+                                    >
+                                      🗓️ Agendado
+                                    </button>
+                                    {jaPassou && (
+                                      <button
+                                        type="button"
+                                        onClick={() => abrirModalConfirmar(c)}
+                                        style={{
+                                          background: 'none',
+                                          border: 'none',
+                                          color: 'var(--cor-sucesso)',
+                                          fontSize: '0.7rem',
+                                          fontWeight: 700,
+                                          cursor: 'pointer',
+                                          padding: 0,
+                                          textDecoration: 'underline',
+                                        }}
+                                        title="Data da consulta alcançada! Clique para confirmar que compareceu."
+                                      >
+                                        ⚠️ Confirmar Realização
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+
+                                {c.status === 'concluido' && (
+                                  <span
+                                    style={{
+                                      backgroundColor: '#ecfdf5',
+                                      color: '#047857',
+                                      border: '1px solid #6ee7b7',
+                                      padding: '4px 10px',
+                                      fontSize: '0.75rem',
+                                      fontWeight: 700,
+                                      borderRadius: '9999px',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                    title="Consulta/Exame realizada com sucesso"
                                   >
-                                    📞 {contato.telefone}
-                                  </a>
+                                    ✅ Concluído
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ fontWeight: 600 }}>{u?.nome || 'Membro'}</td>
+                              <td>
+                                <span className={`badge ${c.tipo === 'consulta' ? 'badge-primary' : 'badge-secondary'}`}>
+                                  {c.tipo === 'consulta' ? '🩺 Consulta' : '🧪 Exame'}
+                                </span>
+                              </td>
+                              <td style={{ textDecoration: c.status === 'concluido' ? 'line-through' : 'none', fontWeight: 600 }}>{c.titulo}</td>
+                              <td>
+                                <div>
+                                  <span>{c.especialista_ou_clinica || '-'}</span>
+                                  {contato?.telefone && (
+                                    <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
+                                      <a
+                                        href={`tel:${contato.telefone.replace(/\D/g, '')}`}
+                                        style={{ fontSize: '0.75rem', color: 'var(--cor-primaria)', textDecoration: 'none' }}
+                                        title={`Ligar para ${contato.telefone}`}
+                                      >
+                                        📞 {contato.telefone}
+                                      </a>
+                                      <a
+                                        href={`https://wa.me/${contato.telefone.replace(/\D/g, '')}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ fontSize: '0.75rem', color: '#16a34a', textDecoration: 'none' }}
+                                        title="Conversar no WhatsApp"
+                                      >
+                                        💬 Whats
+                                      </a>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                              <td>
+                                {dataValida ? (
+                                  dataValida.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+                                ) : (
+                                  <span style={{ color: '#c2410c', fontWeight: 600, fontSize: '0.8rem' }}>📅 A Definir</span>
+                                )}
+                              </td>
+                              <td>{c.data_retorno ? new Date(c.data_retorno).toLocaleDateString('pt-BR') : '-'}</td>
+                              
+                              {/* Coluna RESULTADO (Apenas para Exames) */}
+                              <td
+                                onClick={() => setConsultaDetalhes(c)}
+                                style={{
+                                  maxWidth: '180px',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  fontSize: '0.8rem',
+                                  color: c.tipo === 'exame' && c.resultado ? 'var(--cor-primaria)' : 'var(--texto-secundario)',
+                                  fontWeight: c.tipo === 'exame' && c.resultado ? 600 : 400,
+                                  cursor: 'pointer',
+                                }}
+                                title={c.tipo === 'exame' ? (c.resultado || 'Sem resultado registrado') : 'Não se aplica a consultas'}
+                              >
+                                {c.tipo === 'exame' ? (c.resultado || '-') : '-'}
+                              </td>
+
+                              {/* Coluna OBSERVAÇÕES / CONDUTA (Para Consultas ou Preparo) */}
+                              <td
+                                onClick={() => setConsultaDetalhes(c)}
+                                style={{
+                                  maxWidth: '180px',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  fontSize: '0.8rem',
+                                  color: 'var(--texto-secundario)',
+                                  cursor: 'pointer',
+                                }}
+                                title={c.observacoes || 'Sem observações'}
+                              >
+                                {c.observacoes || '-'}
+                              </td>
+
+                              <td>
+                                {c.link_anexo ? (
                                   <a
-                                    href={`https://wa.me/${contato.telefone.replace(/\D/g, '')}`}
+                                    href={c.link_anexo}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    style={{ fontSize: '0.75rem', color: '#16a34a', textDecoration: 'none' }}
-                                    title="Conversar no WhatsApp"
+                                    className="btn btn-secondary"
+                                    style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
+                                    title="Visualizar arquivo ou laudo original"
                                   >
-                                    💬 Whats
+                                    📄 Ver Laudo
                                   </a>
+                                ) : (
+                                  <span style={{ color: 'var(--texto-secundario)', fontSize: '0.75rem' }}>-</span>
+                                )}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                                  {c.status === 'a_agendar' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => abrirModalAgendar(c)}
+                                      className="btn btn-primary"
+                                      style={{ padding: '3px 8px', fontSize: '0.75rem' }}
+                                      title="Agendar data com o médico"
+                                    >
+                                      📅 Agendar
+                                    </button>
+                                  )}
+                                  {c.status === 'agendado' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => abrirModalConfirmar(c)}
+                                      className="btn btn-secondary"
+                                      style={{ padding: '3px 8px', fontSize: '0.75rem', color: 'var(--cor-sucesso)', fontWeight: 600 }}
+                                      title="Confirmar que foi realizada"
+                                    >
+                                      ✅ Confirmar
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setConsultaDetalhes(c)}
+                                    className="btn btn-secondary"
+                                    style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                    title="Visualizar laudo, parâmetros e observações completos"
+                                  >
+                                    👁️ Detalhes
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => abrirEdicaoConsulta(c)}
+                                    className="btn btn-secondary"
+                                    style={{ padding: '3px 8px', fontSize: '0.75rem' }}
+                                    title="Alterar consulta ou exame"
+                                  >
+                                    ✏️
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => excluirConsulta(c.id)}
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)', fontSize: '1rem' }}
+                                    title="Excluir"
+                                  >
+                                    🗑️
+                                  </button>
                                 </div>
-                              )}
-                            </div>
-                          </td>
-                          <td>
-                            {dataValida ? (
-                              dataValida.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
-                            ) : (
-                              <span style={{ color: '#c2410c', fontWeight: 600, fontSize: '0.8rem' }}>📅 A Definir</span>
-                            )}
-                          </td>
-                          <td>{c.data_retorno ? new Date(c.data_retorno).toLocaleDateString('pt-BR') : '-'}</td>
-                          
-                          {/* Coluna RESULTADO (Apenas para Exames) */}
-                          <td
-                            onClick={() => setConsultaDetalhes(c)}
-                            style={{
-                              maxWidth: '180px',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              fontSize: '0.8rem',
-                              color: c.tipo === 'exame' && c.resultado ? 'var(--cor-primaria)' : 'var(--texto-secundario)',
-                              fontWeight: c.tipo === 'exame' && c.resultado ? 600 : 400,
-                              cursor: 'pointer',
-                            }}
-                            title={c.tipo === 'exame' ? (c.resultado || 'Sem resultado registrado') : 'Não se aplica a consultas'}
-                          >
-                            {c.tipo === 'exame' ? (c.resultado || '-') : '-'}
-                          </td>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
 
-                          {/* Coluna OBSERVAÇÕES / CONDUTA (Para Consultas ou Preparo) */}
-                          <td
-                            onClick={() => setConsultaDetalhes(c)}
-                            style={{
-                              maxWidth: '180px',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              fontSize: '0.8rem',
-                              color: 'var(--texto-secundario)',
-                              cursor: 'pointer',
-                            }}
-                            title={c.observacoes || 'Sem observações'}
-                          >
-                            {c.observacoes || '-'}
-                          </td>
+                    {/* Paginação */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--borda)', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)' }}>
+                        Exibindo <strong>{(paginaAtualConsultas - 1) * itensPorPaginaConsultas + 1}</strong> a{' '}
+                        <strong>{Math.min(paginaAtualConsultas * itensPorPaginaConsultas, consultas.length)}</strong> de{' '}
+                        <strong>{consultas.length}</strong> registros
+                      </div>
 
-                          <td>
-                            {c.link_anexo ? (
-                              <a
-                                href={c.link_anexo}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="btn btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
-                                title="Visualizar arquivo ou laudo original"
-                              >
-                                📄 Ver Laudo
-                              </a>
-                            ) : (
-                              <span style={{ color: 'var(--texto-secundario)', fontSize: '0.75rem' }}>-</span>
-                            )}
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
-                              {c.status === 'a_agendar' && (
-                                <button
-                                  type="button"
-                                  onClick={() => abrirModalAgendar(c)}
-                                  className="btn btn-primary"
-                                  style={{ padding: '3px 8px', fontSize: '0.75rem' }}
-                                  title="Agendar data com o médico"
-                                >
-                                  📅 Agendar
-                                </button>
-                              )}
-                              {c.status === 'agendado' && (
-                                <button
-                                  type="button"
-                                  onClick={() => abrirModalConfirmar(c)}
-                                  className="btn btn-secondary"
-                                  style={{ padding: '3px 8px', fontSize: '0.75rem', color: 'var(--cor-sucesso)', fontWeight: 600 }}
-                                  title="Confirmar que foi realizada"
-                                >
-                                  ✅ Confirmar
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => setConsultaDetalhes(c)}
-                                className="btn btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                                title="Visualizar laudo, parâmetros e observações completos"
-                              >
-                                👁️ Detalhes
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => abrirEdicaoConsulta(c)}
-                                className="btn btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: '0.75rem' }}
-                                title="Alterar consulta ou exame"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => excluirConsulta(c.id)}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)', fontSize: '1rem' }}
-                                title="Excluir"
-                              >
-                                🗑️
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => setPaginaAtualConsultas((p) => Math.max(1, p - 1))}
+                          disabled={paginaAtualConsultas === 1}
+                          className="btn btn-secondary"
+                          style={{ padding: '5px 12px', fontSize: '0.8rem' }}
+                        >
+                          ◀ Anterior
+                        </button>
+
+                        {Array.from({ length: totalPaginasConsultas }, (_, i) => i + 1).map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            onClick={() => setPaginaAtualConsultas(num)}
+                            className={`btn ${paginaAtualConsultas === num ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ padding: '4px 10px', fontSize: '0.8rem', minWidth: '32px' }}
+                          >
+                            {num}
+                          </button>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={() => setPaginaAtualConsultas((p) => Math.min(totalPaginasConsultas, p + 1))}
+                          disabled={paginaAtualConsultas === totalPaginasConsultas || totalPaginasConsultas === 0}
+                          className="btn btn-secondary"
+                          style={{ padding: '5px 12px', fontSize: '0.8rem' }}
+                        >
+                          Próxima ▶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()
             )}
           </div>
         </div>
@@ -3023,6 +3366,165 @@ export default function SaudePage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL: HISTÓRICO DE CHECK-IN DE HUMOR DA FAMÍLIA         */}
+      {/* ======================================================== */}
+      {modalHistoricoHumorAberto && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10006, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '640px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>📊</span>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>
+                  Histórico de Humor & Bem-Estar Familiar
+                </h2>
+              </div>
+              <button type="button" onClick={() => setModalHistoricoHumorAberto(false)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', marginBottom: '16px' }}>
+              Acompanhamento cronológico do sentimento de cada membro e os motivos registrados.
+            </p>
+
+            {historicoCheckins.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--texto-secundario)' }}>
+                Nenhum check-in registrado ainda.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {historicoCheckins.map((chk) => {
+                  const u = usuarios.find((x) => x.id === chk.usuario_id)
+                  const infoHumor = emojisHumor.find((e) => e.nivel === chk.nivel_humor) || emojisHumor[2]
+                  const motivoOuNota = chk.motivo || chk.notas_diario
+
+                  return (
+                    <div
+                      key={chk.id}
+                      style={{
+                        padding: '12px 14px',
+                        borderRadius: 'var(--raio-md)',
+                        backgroundColor: 'var(--bg-hover)',
+                        borderLeft: `4px solid ${
+                          chk.nivel_humor >= 4 ? 'var(--cor-sucesso)' : chk.nivel_humor === 3 ? '#3b82f6' : 'var(--cor-perigo)'
+                        }`,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: '12px',
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', flex: 1, minWidth: '220px' }}>
+                        <span style={{ fontSize: '1.75rem' }}>{infoHumor.emoji}</span>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <strong style={{ fontSize: '0.95rem' }}>{u?.nome || 'Membro da Família'}</strong>
+                            <span
+                              style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                backgroundColor: 'var(--bg-card)',
+                                color: chk.nivel_humor >= 4 ? 'var(--cor-sucesso)' : chk.nivel_humor === 3 ? '#2563eb' : 'var(--cor-perigo)',
+                              }}
+                            >
+                              {infoHumor.label}
+                            </span>
+                          </div>
+
+                          {motivoOuNota ? (
+                            <div style={{ fontSize: '0.85rem', marginTop: '4px', color: 'var(--texto-principal)', fontStyle: 'italic' }}>
+                              &ldquo;{motivoOuNota}&rdquo;
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '2px' }}>
+                              Sem motivo detalhado informado
+                            </div>
+                          )}
+
+                          <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginTop: '4px' }}>
+                            📅 {new Date(chk.criado_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => excluirCheckinHumor(chk.id)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)', fontSize: '0.9rem', padding: '4px' }}
+                        title="Excluir este registro"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+              <button type="button" onClick={() => setModalHistoricoHumorAberto(false)} className="btn btn-secondary">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL: ALTERAR MEMBRO EM LOTE PARA CONSULTAS / EXAMES    */}
+      {/* ======================================================== */}
+      {modalAlterarMembroLoteAberto && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10006, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '480px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>👤</span>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                  Transferir Membro em Lote
+                </h2>
+              </div>
+              <button type="button" onClick={() => setModalAlterarMembroLoteAberto(false)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--texto-secundario)', marginBottom: '16px' }}>
+              Selecione para qual membro da família você deseja atribuir os <strong>{idsConsultasSelecionados.length}</strong> exames/consultas selecionados:
+            </p>
+
+            <div className="form-group" style={{ marginBottom: '20px' }}>
+              <label className="form-label">Novo Membro Responsável</label>
+              <select
+                className="input"
+                value={novoMembroLoteId}
+                onChange={(e) => setNovoMembroLoteId(e.target.value)}
+              >
+                {usuarios.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.nome}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" onClick={() => setModalAlterarMembroLoteAberto(false)} className="btn btn-secondary">
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => executarAlterarMembroLote(novoMembroLoteId)}
+                disabled={executandoAcaoLote || !novoMembroLoteId}
+                className="btn btn-primary"
+                style={{ fontWeight: 700 }}
+              >
+                {executandoAcaoLote ? 'Transferindo...' : 'Confirmar Transferência'}
+              </button>
+            </div>
           </div>
         </div>
       )}
