@@ -16,6 +16,7 @@ interface FichaMedica {
   alergias?: string
   medicamentos_uso_continuo?: string
   numero_plano_saude?: string
+  carteirinha_plano_url?: string
 }
 
 interface Medicamento {
@@ -147,6 +148,21 @@ export default function SaudePage() {
   const [editConConcluido, setEditConConcluido] = useState(false)
   const [salvandoEdicaoConsulta, setSalvandoEdicaoConsulta] = useState(false)
 
+  // Estados para Carteirinha do Convênio e Edição de Ficha Médica
+  const [arquivoCarteirinha, setArquivoCarteirinha] = useState<File | null>(null)
+  const [fichaEditando, setFichaEditando] = useState<FichaMedica | null>(null)
+  const [editFichaUsuarioId, setEditFichaUsuarioId] = useState('')
+  const [editTipoSanguineo, setEditTipoSanguineo] = useState('O+')
+  const [editAlergias, setEditAlergias] = useState('')
+  const [editMedicamentosContinuos, setEditMedicamentosContinuos] = useState('')
+  const [editPlanoSaude, setEditPlanoSaude] = useState('')
+  const [editCarteirinhaUrl, setEditCarteirinhaUrl] = useState('')
+  const [editArquivoCarteirinha, setEditArquivoCarteirinha] = useState<File | null>(null)
+  const [salvandoEdicaoFicha, setSalvandoEdicaoFicha] = useState(false)
+
+  // Estado para Detalhes de Consulta / Exame ao Clicar
+  const [consultaDetalhes, setConsultaDetalhes] = useState<ConsultaExame | null>(null)
+
   const emojisHumor = [
     { nivel: 1, label: 'Muito Mal', emoji: '😢' },
     { nivel: 2, label: 'Para Baixo', emoji: '😕' },
@@ -238,12 +254,28 @@ export default function SaudePage() {
     if (!fichaUsuarioId || salvandoFicha) return
     setSalvandoFicha(true)
     try {
+      let carteirinhaUrl = null
+      if (arquivoCarteirinha) {
+        const nomeArquivo = `carteirinhas/${Date.now()}_${arquivoCarteirinha.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+        const { error: upErr } = await supabase.storage
+          .from('familia-os-documentos')
+          .upload(nomeArquivo, arquivoCarteirinha, { upsert: true })
+
+        if (!upErr) {
+          const { data: pUrl } = supabase.storage
+            .from('familia-os-documentos')
+            .getPublicUrl(nomeArquivo)
+          carteirinhaUrl = pUrl.publicUrl
+        }
+      }
+
       const payload = {
         usuario_id: fichaUsuarioId,
         tipo_sanguineo: tipoSanguineo,
         alergias: alergias || 'Nenhuma',
         medicamentos_uso_continuo: medicamentosContinuos || 'Nenhum',
         numero_plano_saude: planoSaude || 'Não informado',
+        carteirinha_plano_url: carteirinhaUrl,
       }
       const { error } = await supabase.from('saude_fichas_medicas').insert([payload])
       if (error) throw error
@@ -251,11 +283,69 @@ export default function SaudePage() {
       setAlergias('')
       setMedicamentosContinuos('')
       setPlanoSaude('')
+      setArquivoCarteirinha(null)
       alert('Ficha médica salva com sucesso!')
     } catch (err: any) {
       alert('Erro ao salvar ficha: ' + err.message)
     } finally {
       setSalvandoFicha(false)
+    }
+  }
+
+  const abrirEdicaoFicha = (f: FichaMedica) => {
+    setFichaEditando(f)
+    setEditFichaUsuarioId(f.usuario_id)
+    setEditTipoSanguineo(f.tipo_sanguineo || 'O+')
+    setEditAlergias(f.alergias || '')
+    setEditMedicamentosContinuos(f.medicamentos_uso_continuo || '')
+    setEditPlanoSaude(f.numero_plano_saude || '')
+    setEditCarteirinhaUrl(f.carteirinha_plano_url || '')
+    setEditArquivoCarteirinha(null)
+  }
+
+  const handleSalvarEdicaoFicha = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!fichaEditando || salvandoEdicaoFicha) return
+    setSalvandoEdicaoFicha(true)
+    try {
+      let carteirinhaFinal = editCarteirinhaUrl
+      if (editArquivoCarteirinha) {
+        const nomeArquivo = `carteirinhas/${Date.now()}_${editArquivoCarteirinha.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+        const { error: upErr } = await supabase.storage
+          .from('familia-os-documentos')
+          .upload(nomeArquivo, editArquivoCarteirinha, { upsert: true })
+
+        if (!upErr) {
+          const { data: pUrl } = supabase.storage
+            .from('familia-os-documentos')
+            .getPublicUrl(nomeArquivo)
+          carteirinhaFinal = pUrl.publicUrl
+        }
+      }
+
+      const payload = {
+        usuario_id: editFichaUsuarioId,
+        tipo_sanguineo: editTipoSanguineo,
+        alergias: editAlergias || 'Nenhuma',
+        medicamentos_uso_continuo: editMedicamentosContinuos || 'Nenhum',
+        numero_plano_saude: editPlanoSaude || 'Não informado',
+        carteirinha_plano_url: carteirinhaFinal || null,
+      }
+
+      const { error } = await supabase
+        .from('saude_fichas_medicas')
+        .update(payload)
+        .eq('id', fichaEditando.id)
+
+      if (error) throw error
+
+      await carregarDados()
+      setFichaEditando(null)
+      alert('Ficha médica atualizada com sucesso!')
+    } catch (err: any) {
+      alert('Erro ao atualizar ficha: ' + err.message)
+    } finally {
+      setSalvandoEdicaoFicha(false)
     }
   }
 
@@ -886,6 +976,16 @@ export default function SaudePage() {
                 <label className="form-label">Plano de Saúde</label>
                 <input type="text" className="input" placeholder="Ex: Unimed 123456" value={planoSaude} onChange={(e) => setPlanoSaude(e.target.value)} />
               </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Carteirinha (Foto/PDF)</label>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="input"
+                  style={{ padding: '7px 12px' }}
+                  onChange={(e) => setArquivoCarteirinha(e.target.files?.[0] || null)}
+                />
+              </div>
               <button type="submit" className="btn btn-primary" style={{ height: '42px' }} disabled={salvandoFicha}>
                 {salvandoFicha ? 'Salvando...' : '+ Salvar Ficha'}
               </button>
@@ -906,8 +1006,29 @@ export default function SaudePage() {
                     <div key={f.id} className="card" style={{ borderLeft: '4px solid var(--cor-perigo)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                         <span style={{ fontWeight: 700, fontSize: '1.1rem' }}>{u?.nome || 'Membro'}</span>
-                        <div style={{ display: 'flex', gap: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                           <span className="badge badge-danger">Tipo: {f.tipo_sanguineo}</span>
+                          {f.carteirinha_plano_url && (
+                            <a
+                              href={f.carteirinha_plano_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn btn-secondary"
+                              style={{ padding: '3px 8px', fontSize: '0.75rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              title="Visualizar carteirinha do plano de saúde"
+                            >
+                              💳 Carteirinha
+                            </a>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => abrirEdicaoFicha(f)}
+                            className="btn btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: '0.75rem' }}
+                            title="Alterar ficha médica"
+                          >
+                            ✏️
+                          </button>
                           <button type="button" onClick={() => excluirFicha(f.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)' }}>🗑️</button>
                         </div>
                       </div>
@@ -1207,6 +1328,15 @@ export default function SaudePage() {
                             <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
                               <button
                                 type="button"
+                                onClick={() => setConsultaDetalhes(c)}
+                                className="btn btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                title="Visualizar laudo, parâmetros e observações completos"
+                              >
+                                👁️ Detalhes
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => abrirEdicaoConsulta(c)}
                                 className="btn btn-secondary"
                                 style={{ padding: '3px 8px', fontSize: '0.75rem' }}
@@ -1375,6 +1505,19 @@ export default function SaudePage() {
                       <div>⚠️ <strong>Alergias Críticas:</strong> {f.alergias}</div>
                       <div>💊 <strong>Uso Contínuo:</strong> {f.medicamentos_uso_continuo}</div>
                       <div>🏥 <strong>Plano de Saúde:</strong> {f.numero_plano_saude}</div>
+                      {f.carteirinha_plano_url && (
+                        <div style={{ marginTop: '8px' }}>
+                          <a
+                            href={f.carteirinha_plano_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-primary"
+                            style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none', fontWeight: 700 }}
+                          >
+                            💳 Abrir Carteirinha do Convênio ({u?.nome})
+                          </a>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )
@@ -1643,6 +1786,177 @@ export default function SaudePage() {
                 </button>
                 <button type="submit" disabled={salvandoEdicaoConsulta} className="btn btn-primary" style={{ fontWeight: 700 }}>
                   {salvandoEdicaoConsulta ? 'Salvando...' : 'Salvar Alterações'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL DETALHES COMPLETOS DE CONSULTA / EXAME             */}
+      {/* ======================================================== */}
+      {consultaDetalhes && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10003, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '680px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '1.75rem' }}>{consultaDetalhes.tipo === 'consulta' ? '🩺' : '🧪'}</span>
+                <div>
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 800 }}>{consultaDetalhes.titulo}</h2>
+                  <span className={`badge ${consultaDetalhes.tipo === 'consulta' ? 'badge-primary' : 'badge-secondary'}`}>
+                    {consultaDetalhes.tipo === 'consulta' ? 'Consulta Médica' : 'Exame Laboratorial'}
+                  </span>
+                </div>
+              </div>
+              <button type="button" onClick={() => setConsultaDetalhes(null)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '20px', backgroundColor: 'var(--bg-hover)', padding: '14px', borderRadius: 'var(--raio-md)' }}>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>PACIENTE / MEMBRO:</span>
+                <div style={{ fontWeight: 700, fontSize: '1rem' }}>
+                  {usuarios.find((u) => u.id === consultaDetalhes.usuario_id)?.nome || 'Membro'}
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>MÉDICO / CLÍNICA / LAB:</span>
+                <div style={{ fontWeight: 600 }}>{consultaDetalhes.especialista_ou_clinica || '-'}</div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>DATA E HORA:</span>
+                <div style={{ fontWeight: 600 }}>
+                  {new Date(consultaDetalhes.data_agendada).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)' }}>DATA DE RETORNO:</span>
+                <div style={{ fontWeight: 600 }}>
+                  {consultaDetalhes.data_retorno ? new Date(consultaDetalhes.data_retorno).toLocaleDateString('pt-BR') : 'Sem retorno previsto'}
+                </div>
+              </div>
+            </div>
+
+            {consultaDetalhes.link_anexo && (
+              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: 'var(--cor-primaria-suave)', borderRadius: 'var(--raio-md)', border: '1px solid var(--cor-primaria)' }}>
+                <a
+                  href={consultaDetalhes.link_anexo}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-primary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none', fontWeight: 700 }}
+                >
+                  📄 Abrir Documento / Laudo Original (PDF / Imagem)
+                </a>
+              </div>
+            )}
+
+            <div style={{ marginBottom: '24px' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '8px' }}>
+                📝 Parâmetros, Resultados & Conclusão do Laudo:
+              </h3>
+              <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', fontSize: '0.9rem', backgroundColor: 'var(--bg-card)', padding: '16px', borderRadius: 'var(--raio-md)', border: '1px solid var(--borda)' }}>
+                {consultaDetalhes.observacoes || 'Nenhuma observação clínica registrada para este item.'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const item = consultaDetalhes
+                  setConsultaDetalhes(null)
+                  abrirEdicaoConsulta(item)
+                }}
+                className="btn btn-primary"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                ✏️ Editar Este Exame
+              </button>
+              <button type="button" onClick={() => setConsultaDetalhes(null)} className="btn btn-secondary">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL DE EDIÇÃO DE FICHA MÉDICA                          */}
+      {/* ======================================================== */}
+      {fichaEditando && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '640px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-perigo)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>✏️</span>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Alterar Ficha Médica de Emergência</h2>
+              </div>
+              <button type="button" onClick={() => setFichaEditando(null)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <form onSubmit={handleSalvarEdicaoFicha} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Membro da Família</label>
+                <select className="input" value={editFichaUsuarioId} onChange={(e) => setEditFichaUsuarioId(e.target.value)}>
+                  {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Tipo Sanguíneo</label>
+                <select className="input" value={editTipoSanguineo} onChange={(e) => setEditTipoSanguineo(e.target.value)}>
+                  <option value="A+">A+</option><option value="A-">A-</option><option value="B+">B+</option><option value="B-">B-</option>
+                  <option value="AB+">AB+</option><option value="AB-">AB-</option><option value="O+">O+</option><option value="O-">O-</option>
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <label className="form-label">Alergias Conhecidas</label>
+                <input type="text" className="input" value={editAlergias} onChange={(e) => setEditAlergias(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <label className="form-label">Medicamentos de Uso Contínuo</label>
+                <input type="text" className="input" value={editMedicamentosContinuos} onChange={(e) => setEditMedicamentosContinuos(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Nº do Plano de Saúde</label>
+                <input type="text" className="input" value={editPlanoSaude} onChange={(e) => setEditPlanoSaude(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Nova Carteirinha (Foto/PDF)</label>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="input"
+                  style={{ padding: '7px 12px' }}
+                  onChange={(e) => setEditArquivoCarteirinha(e.target.files?.[0] || null)}
+                />
+              </div>
+
+              {editCarteirinhaUrl && (
+                <div style={{ gridColumn: '1 / -1', marginTop: '4px' }}>
+                  <a
+                    href={editCarteirinhaUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    💳 Visualizar Carteirinha Atual
+                  </a>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', gridColumn: '1 / -1', marginTop: '10px' }}>
+                <button type="button" onClick={() => setFichaEditando(null)} className="btn btn-secondary">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={salvandoEdicaoFicha} className="btn btn-primary" style={{ fontWeight: 700 }}>
+                  {salvandoEdicaoFicha ? 'Salvando...' : 'Salvar Alterações'}
                 </button>
               </div>
             </form>
