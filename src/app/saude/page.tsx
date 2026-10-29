@@ -134,6 +134,19 @@ export default function SaudePage() {
   const [examesSelecionados, setExamesSelecionados] = useState<{ [index: number]: boolean }>({})
   const [conArquivo, setConArquivo] = useState<File | null>(null)
 
+  // Estados para Edição de Consulta/Exame
+  const [consultaEditando, setConsultaEditando] = useState<ConsultaExame | null>(null)
+  const [editConUsuarioId, setEditConUsuarioId] = useState('')
+  const [editConTipo, setEditConTipo] = useState<'consulta' | 'exame'>('consulta')
+  const [editConTitulo, setEditConTitulo] = useState('')
+  const [editConClinica, setEditConClinica] = useState('')
+  const [editConData, setEditConData] = useState('')
+  const [editConRetorno, setEditConRetorno] = useState('')
+  const [editConObs, setEditConObs] = useState('')
+  const [editConLinkAnexo, setEditConLinkAnexo] = useState('')
+  const [editConConcluido, setEditConConcluido] = useState(false)
+  const [salvandoEdicaoConsulta, setSalvandoEdicaoConsulta] = useState(false)
+
   const emojisHumor = [
     { nivel: 1, label: 'Muito Mal', emoji: '😢' },
     { nivel: 2, label: 'Para Baixo', emoji: '😕' },
@@ -390,6 +403,62 @@ export default function SaudePage() {
       setConsultas((prev) => prev.filter((c) => c.id !== id))
     } catch (err) {
       console.error(err)
+    }
+  }
+
+  const abrirEdicaoConsulta = (c: ConsultaExame) => {
+    setConsultaEditando(c)
+    setEditConUsuarioId(c.usuario_id)
+    setEditConTipo(c.tipo)
+    setEditConTitulo(c.titulo)
+    setEditConClinica(c.especialista_ou_clinica || '')
+
+    try {
+      const d = new Date(c.data_agendada)
+      const offset = d.getTimezoneOffset() * 60000
+      const localISOTime = new Date(d.getTime() - offset).toISOString().slice(0, 16)
+      setEditConData(localISOTime)
+    } catch {
+      setEditConData(c.data_agendada ? c.data_agendada.slice(0, 16) : '')
+    }
+
+    setEditConRetorno(c.data_retorno ? c.data_retorno.slice(0, 10) : '')
+    setEditConObs(c.observacoes || '')
+    setEditConLinkAnexo(c.link_anexo || '')
+    setEditConConcluido(c.concluido)
+  }
+
+  const handleSalvarEdicaoConsulta = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!consultaEditando || !editConTitulo || !editConData || salvandoEdicaoConsulta) return
+    setSalvandoEdicaoConsulta(true)
+    try {
+      const payload = {
+        usuario_id: editConUsuarioId,
+        tipo: editConTipo,
+        titulo: editConTitulo,
+        especialista_ou_clinica: editConClinica || null,
+        data_agendada: new Date(editConData).toISOString(),
+        data_retorno: editConRetorno || null,
+        observacoes: editConObs || null,
+        link_anexo: editConLinkAnexo || null,
+        concluido: editConConcluido,
+      }
+
+      const { error } = await supabase
+        .from('saude_consultas_exames')
+        .update(payload)
+        .eq('id', consultaEditando.id)
+
+      if (error) throw error
+
+      await carregarDados()
+      setConsultaEditando(null)
+      alert('Alteração salva com sucesso!')
+    } catch (err: any) {
+      alert('Erro ao atualizar: ' + err.message)
+    } finally {
+      setSalvandoEdicaoConsulta(false)
     }
   }
 
@@ -1135,7 +1204,25 @@ export default function SaudePage() {
                             )}
                           </td>
                           <td style={{ textAlign: 'right' }}>
-                            <button type="button" onClick={() => excluirConsulta(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)' }}>🗑️</button>
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                onClick={() => abrirEdicaoConsulta(c)}
+                                className="btn btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.75rem' }}
+                                title="Alterar consulta ou exame"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => excluirConsulta(c.id)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cor-perigo)', fontSize: '1rem' }}
+                                title="Excluir"
+                              >
+                                🗑️
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       )
@@ -1471,6 +1558,94 @@ export default function SaudePage() {
                 {salvandoExamesIa ? 'Registrando Todos...' : '💾 Confirmar e Registrar Todos os Exames'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL DE EDIÇÃO DE CONSULTA / EXAME                      */}
+      {/* ======================================================== */}
+      {consultaEditando && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: '16px' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '640px', backgroundColor: 'var(--bg-card)', border: '2px solid var(--cor-primaria)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.5rem' }}>✏️</span>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>
+                  Editar {consultaEditando.tipo === 'consulta' ? 'Consulta Médica' : 'Exame Laboratorial'}
+                </h2>
+              </div>
+              <button type="button" onClick={() => setConsultaEditando(null)} style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <form onSubmit={handleSalvarEdicaoConsulta} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Membro da Família</label>
+                <select className="input" value={editConUsuarioId} onChange={(e) => setEditConUsuarioId(e.target.value)}>
+                  {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Tipo</label>
+                <select className="input" value={editConTipo} onChange={(e) => setEditConTipo(e.target.value as any)}>
+                  <option value="consulta">🩺 Consulta Médica</option>
+                  <option value="exame">🧪 Exame / Laboratório</option>
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <label className="form-label">Título / Especialidade</label>
+                <input type="text" className="input" value={editConTitulo} onChange={(e) => setEditConTitulo(e.target.value)} required />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Médico ou Clínica</label>
+                <input type="text" className="input" value={editConClinica} onChange={(e) => setEditConClinica(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Data e Hora Agendada</label>
+                <input type="datetime-local" className="input" value={editConData} onChange={(e) => setEditConData(e.target.value)} required />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Data de Retorno (Opcional)</label>
+                <input type="date" className="input" value={editConRetorno} onChange={(e) => setEditConRetorno(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Link do Laudo / Arquivo</label>
+                <input type="url" className="input" placeholder="https://..." value={editConLinkAnexo} onChange={(e) => setEditConLinkAnexo(e.target.value)} />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <label className="form-label">Observações / Conclusão do Laudo</label>
+                <textarea className="input" rows={3} value={editConObs} onChange={(e) => setEditConObs(e.target.value)} />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', gridColumn: '1 / -1' }}>
+                <input
+                  type="checkbox"
+                  id="editConConcluido"
+                  checked={editConConcluido}
+                  onChange={(e) => setEditConConcluido(e.target.checked)}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--cor-sucesso)' }}
+                />
+                <label htmlFor="editConConcluido" style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600 }}>
+                  Marcar como Concluído / Realizado
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', gridColumn: '1 / -1', marginTop: '10px' }}>
+                <button type="button" onClick={() => setConsultaEditando(null)} className="btn btn-secondary">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={salvandoEdicaoConsulta} className="btn btn-primary" style={{ fontWeight: 700 }}>
+                  {salvandoEdicaoConsulta ? 'Salvando...' : 'Salvar Alterações'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
