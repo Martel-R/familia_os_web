@@ -300,7 +300,7 @@ export default function EventosPage() {
     }
   }
 
-  const conectarWhatsappQrCode = async () => {
+  const conectarWhatsappQrCode = async (tentativa = 1) => {
     try {
       setConectandoWhats(true)
       const res = await fetch('/api/whatsapp/instance', {
@@ -309,22 +309,64 @@ export default function EventosPage() {
         body: JSON.stringify({ acao: 'connect' }),
       })
       const data = await res.json()
-      if (data.qrcode?.base64) {
-        setWhatsQrCode(data.qrcode.base64)
-      } else if (data.base64) {
-        setWhatsQrCode(data.base64)
-      } else if (data.code) {
-        setWhatsQrCode(data.code)
-      } else {
-        alert(data.message || 'Status retornado: ' + JSON.stringify(data))
+
+      // Se a instância já estiver aberta e conectada
+      if (data?.instance?.state === 'open' || data?.state === 'open') {
+        setWhatsStatus('open')
+        setWhatsQrCode(null)
+        setConectandoWhats(false)
+        alert('🎉 Esta instância já está conectada ao WhatsApp!')
+        return
       }
-      await checarStatusWhatsapp()
-    } catch (err: any) {
-      alert('Erro ao gerar QR Code: ' + err.message)
-    } finally {
+
+      const imgBase64 = data.base64 || data.qrcode?.base64
+      if (imgBase64) {
+        setWhatsQrCode(imgBase64)
+        setConectandoWhats(false)
+        await checarStatusWhatsapp()
+        return
+      }
+
+      // Se count for 0 ou base64 ainda não estiver pronto, a Evolution API está subindo o socket do Baileys
+      if ((data.count === 0 || !imgBase64) && tentativa <= 6) {
+        setTimeout(() => {
+          conectarWhatsappQrCode(tentativa + 1)
+        }, 1500)
+        return
+      }
+
       setConectandoWhats(false)
+      alert('A Evolution API está inicializando a instância. Aguarde 2 segundos e clique em "📲 2. Gerar QR Code" novamente.')
+    } catch (err: any) {
+      setConectandoWhats(false)
+      alert('Erro ao gerar QR Code: ' + err.message)
     }
   }
+
+  // Polling automático enquanto o QR Code estiver visível para detectar pareamento
+  useEffect(() => {
+    if (!whatsQrCode || !modalWhatsappAberto) return
+
+    const intervalo = setInterval(async () => {
+      try {
+        const res = await fetch('/api/whatsapp/instance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ acao: 'status' }),
+        })
+        const data = await res.json()
+        const estado = data?.instance?.state || data?.state
+        if (estado === 'open') {
+          setWhatsStatus('open')
+          setWhatsQrCode(null)
+          clearInterval(intervalo)
+          alert('🎉 WhatsApp Conectado com Sucesso! A sua instância agora está ativa e pronta para enviar convites!')
+        }
+      } catch {}
+    }, 3000)
+
+    return () => clearInterval(intervalo)
+  }, [whatsQrCode, modalWhatsappAberto])
 
   const checarStatusWhatsapp = async () => {
     try {
@@ -2874,7 +2916,7 @@ export default function EventosPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={conectarWhatsappQrCode}
+                  onClick={() => conectarWhatsappQrCode(1)}
                   disabled={conectandoWhats || !whatsServerUrl || !whatsApiKey}
                   className="btn btn-primary"
                   style={{ flex: 1, minWidth: '160px', padding: '8px 12px', fontSize: '0.8rem', backgroundColor: '#25D366', borderColor: '#25D366', fontWeight: 600 }}
