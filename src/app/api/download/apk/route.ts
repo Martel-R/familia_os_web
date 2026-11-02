@@ -2,8 +2,6 @@ import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
 
-export const dynamic = 'force-dynamic'
-
 const GITHUB_RELEASE_APK_URL =
   'https://github.com/Martel-R/familia_os_android/releases/download/latest-apk/familia-os.apk'
 const GITHUB_RELEASE_API_URL =
