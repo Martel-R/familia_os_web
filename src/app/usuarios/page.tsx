@@ -64,11 +64,16 @@ export default function UsuariosPage() {
       if (error) {
         console.error('Erro ao buscar usuários:', error)
       } else if (data) {
-        // Filtra pelo tenant atual (ou mantém registros ativos caso familia_id ainda seja nulo)
-        const filtrados = data.filter((u: any) => {
-          if (u.familia_id) return u.familia_id === familiaId
-          return u.ativo !== false
-        })
+        // Filtra estritamente pelo tenant atual e higieniza avatar_url inválido
+        const filtrados = data
+          .filter((u: any) => u.familia_id === familiaId)
+          .map((u: any) => ({
+            ...u,
+            avatar_url:
+              u.avatar_url && !String(u.avatar_url).includes('?')
+                ? u.avatar_url
+                : '👤',
+          }))
         setUsuarios(filtrados)
       }
     } finally {

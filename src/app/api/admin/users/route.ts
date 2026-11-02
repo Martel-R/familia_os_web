@@ -7,16 +7,19 @@ import {
 
 export async function POST(req: NextRequest) {
   try {
+    const body = await req.json()
     const {
       email,
       password,
       nome,
       perfil,
       avatar_url,
+      avatar_emoji,
       saldo_moedas,
       cor_tema,
       familia_id,
-    } = await req.json()
+    } = body
+    const avatarFinal = avatar_url || avatar_emoji || '👤'
 
     if (!email || !password || !nome) {
       return NextResponse.json({ error: 'E-mail, senha e nome são obrigatórios.' }, { status: 400 })
@@ -59,7 +62,7 @@ export async function POST(req: NextRequest) {
         nome: nome.trim(),
         perfil: perfil || 'filho_membro',
         saldo_moedas: parseInt(saldo_moedas) || 0,
-        avatar_url: avatar_url || '👤',
+        avatar_url: avatarFinal,
         cor_tema: cor_tema || '#4f46e5',
         ativo: true,
       }

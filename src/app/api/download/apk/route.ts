@@ -58,43 +58,6 @@ export async function GET(request: Request) {
     })
   }
 
-  // 1. Se existir arquivo local atualizado em public/downloads/familia-os.apk, verifica se há release mais recente no GitHub
-  try {
-    const releaseRes = await fetch(GITHUB_RELEASE_API_URL, {
-      headers: { Accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(2500),
-    })
-    if (releaseRes.ok) {
-      const release = await releaseRes.json()
-      const asset = (release.assets || []).find(
-        (a: { name?: string; updated_at?: string }) => a.name === 'familia-os.apk'
-      )
-      if (asset) {
-        const remoteTime = new Date(asset.updated_at || release.published_at || 0).getTime()
-        const localTime = hasLocalApk ? fs.statSync(localApkPath).mtime.getTime() : 0
-        if (!hasLocalApk || remoteTime > localTime + 60_000) {
-          return NextResponse.redirect(GITHUB_RELEASE_APK_URL, 302)
-        }
-      }
-    }
-  } catch {
-    // Continua para servir o APK local
-  }
-
-  // 2. Serve o arquivo APK local empacotado em public/downloads/familia-os.apk
-  if (hasLocalApk) {
-    const fileBuffer = fs.readFileSync(localApkPath)
-    return new NextResponse(fileBuffer, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/vnd.android.package-archive',
-        'Content-Disposition': 'attachment; filename="familia-os.apk"',
-        'Content-Length': String(fileBuffer.length),
-        'Cache-Control': 'no-store, max-age=0',
-      },
-    })
-  }
-
-  // 3. Fallback direto para URL de release do GitHub
+  // Redireciona diretamente para o CDN da Release do GitHub (suporta HTTP Range/Resume no Android sem timeout no túnel)
   return NextResponse.redirect(GITHUB_RELEASE_APK_URL, 302)
 }

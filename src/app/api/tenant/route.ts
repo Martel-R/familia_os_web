@@ -230,6 +230,9 @@ export async function POST(request: NextRequest) {
       })
 
       if (authError) {
+        if (!modoConvite && familiaAlvo?.id) {
+          await supabase.from('familias').delete().eq('id', familiaAlvo.id)
+        }
         return NextResponse.json(
           { error: authError.message || 'Erro ao criar conta no Supabase Auth.' },
           { status: 400 }
@@ -237,6 +240,7 @@ export async function POST(request: NextRequest) {
       }
 
       authUserId = authData.user?.id || null
+      const avatarPadrao = perfilInicial === 'pai_admin' ? '👨' : '👦'
 
       // Verifica se trigger já inseriu em familialm.usuarios
       const { data: existente } = await supabase
@@ -247,6 +251,10 @@ export async function POST(request: NextRequest) {
 
       let usuarioCriado = existente
       if (existente) {
+        const avatarValido =
+          existente.avatar_url && !String(existente.avatar_url).includes('?')
+            ? existente.avatar_url
+            : avatarPadrao
         const { data: atualizado } = await supabase
           .from('usuarios')
           .update({
@@ -254,6 +262,7 @@ export async function POST(request: NextRequest) {
             email: email.trim(),
             perfil: perfilInicial,
             familia_id: familiaAlvo.id,
+            avatar_url: avatarValido,
             ativo: true,
           })
           .eq('id', existente.id)
@@ -272,7 +281,7 @@ export async function POST(request: NextRequest) {
               email: email.trim(),
               perfil: perfilInicial,
               saldo_moedas: 0,
-              avatar_url: perfilInicial === 'pai_admin' ? '👨' : '👦',
+              avatar_url: avatarPadrao,
               cor_tema: '#4f46e5',
               ativo: true,
             },
@@ -302,8 +311,9 @@ export async function POST(request: NextRequest) {
 
     // Ação 2: Atualizar nome da Família
     if (acao === 'atualizar_familia') {
-      const { familiaId, nome } = body
-      if (!familiaId || !nome?.trim()) {
+      const { familiaId, nome, nomeFamilia } = body
+      const nomeLimpo = (nome || nomeFamilia || '').trim()
+      if (!familiaId || !nomeLimpo) {
         return NextResponse.json(
           { error: 'ID da família e novo nome são obrigatórios.' },
           { status: 400 }
@@ -313,8 +323,8 @@ export async function POST(request: NextRequest) {
       const { data, error } = await supabase
         .from('familias')
         .update({
-          nome: nome.trim(),
-          slug: gerarSlug(nome.trim()),
+          nome: nomeLimpo,
+          slug: gerarSlug(nomeLimpo),
           atualizado_em: new Date().toISOString(),
         })
         .eq('id', familiaId)

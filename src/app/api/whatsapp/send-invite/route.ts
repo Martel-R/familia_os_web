@@ -3,12 +3,26 @@ import { createSupabaseAdmin } from '@/lib/supabase/admin'
 
 const supabase = createSupabaseAdmin()
 
-async function obterConfiguracao() {
-  const { data } = await supabase
+async function obterConfiguracao(familiaId?: string | null) {
+  const chaveTenant =
+    familiaId && familiaId !== '00000000-0000-0000-0000-000000000001'
+      ? `evolution_whatsapp:${familiaId}`
+      : 'evolution_whatsapp'
+
+  let { data } = await supabase
     .from('configuracoes_casa')
     .select('valor')
-    .eq('id', 'evolution_whatsapp')
+    .eq('id', chaveTenant)
     .maybeSingle()
+
+  if (!data && chaveTenant !== 'evolution_whatsapp') {
+    const fallback = await supabase
+      .from('configuracoes_casa')
+      .select('valor')
+      .eq('id', 'evolution_whatsapp')
+      .maybeSingle()
+    data = fallback.data
+  }
 
   if (!data?.valor?.serverUrl || !data?.valor?.apiKey) {
     throw new Error('Evolution API não configurada. Configure o servidor e a API Key no menu de WhatsApp.')
@@ -28,9 +42,9 @@ function normalizarTelefoneWhatsapp(telefone: string): string {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { convidadoId, eventoId, todosPendentes } = body
+    const { convidadoId, eventoId, todosPendentes, familiaId } = body
 
-    const config = await obterConfiguracao()
+    const config = await obterConfiguracao(familiaId)
     const { serverUrl, apiKey, instanceName } = config
 
     // Lista de convidados a enviar

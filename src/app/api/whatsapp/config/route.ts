@@ -43,11 +43,16 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    const srvUrl = data.valor?.serverUrl || data.valor?.url || ''
+    const instName = data.valor?.instanceName || data.valor?.instance || 'familia-os'
+
     return NextResponse.json({
       configurado: true,
-      serverUrl: data.valor?.serverUrl || '',
+      serverUrl: srvUrl,
+      url: srvUrl,
       apiKey: data.valor?.apiKey || '',
-      instanceName: data.valor?.instanceName || 'familia-os',
+      instanceName: instName,
+      instance: instName,
       atualizado_em: data.atualizado_em,
     })
   } catch (err: any) {
@@ -58,9 +63,11 @@ export async function GET(request: NextRequest) {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { serverUrl, apiKey, instanceName, familiaId } = body
+    const { serverUrl, url, apiKey, instanceName, instance, familiaId } = body
+    const srvUrlFinal = (serverUrl || url || '').trim()
+    const instNameFinal = (instanceName || instance || '').trim()
 
-    if (!serverUrl || !apiKey || !instanceName) {
+    if (!srvUrlFinal || !apiKey || !instNameFinal) {
       return NextResponse.json(
         { error: 'Parâmetros serverUrl, apiKey e instanceName são obrigatórios.' },
         { status: 400 }
@@ -68,12 +75,12 @@ export async function POST(request: Request) {
     }
 
     // Normaliza URL removendo barra final
-    const urlLimpa = serverUrl.replace(/\/+$/, '')
+    const urlLimpa = srvUrlFinal.replace(/\/+$/, '')
 
     const payload = {
       serverUrl: urlLimpa,
       apiKey: apiKey.trim(),
-      instanceName: instanceName.trim(),
+      instanceName: instNameFinal,
       ativo: true,
     }
 
