@@ -8,6 +8,10 @@ export default function LoginPage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
+  const [nomeUsuario, setNomeUsuario] = useState('')
+  const [nomeFamilia, setNomeFamilia] = useState('')
+  const [codigoConvite, setCodigoConvite] = useState('')
+  const [tipoCadastro, setTipoCadastro] = useState<'nova_familia' | 'convite'>('nova_familia')
   const [carregando, setCarregando] = useState(false)
   const [mensagem, setMensagem] = useState<{ tipo: 'erro' | 'sucesso'; texto: string } | null>(null)
   const [modoCadastro, setModoCadastro] = useState(false)
@@ -21,19 +25,54 @@ export default function LoginPage() {
 
     try {
       if (modoCadastro) {
-        const { error } = await supabase.auth.signUp({
-          email,
+        if (!nomeUsuario.trim()) {
+          throw new Error('Informe o seu nome completo.')
+        }
+        if (tipoCadastro === 'nova_familia' && !nomeFamilia.trim()) {
+          throw new Error('Informe o nome da sua Família (ex: Família Silva).')
+        }
+        if (tipoCadastro === 'convite' && !codigoConvite.trim()) {
+          throw new Error('Informe o código de convite da Família.')
+        }
+
+        const res = await fetch('/api/tenant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            acao: 'registrar_familia',
+            email: email.trim(),
+            password: senha,
+            nomeUsuario: nomeUsuario.trim(),
+            nomeFamilia: nomeFamilia.trim(),
+            codigoConvite: codigoConvite.trim(),
+            modoConvite: tipoCadastro === 'convite',
+          }),
+        })
+
+        const resultado = await res.json()
+        if (!res.ok) {
+          throw new Error(resultado.error || 'Falha ao cadastrar família.')
+        }
+
+        // Autentica imediatamente após o registro multi-tenant
+        const { error: signInErr } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
           password: senha,
         })
-        if (error) throw error
-        setMensagem({
-          tipo: 'sucesso',
-          texto: 'Cadastro realizado com sucesso! Se necessário, confirme o e-mail ou faça login.',
-        })
-        setModoCadastro(false)
+
+        if (signInErr) {
+          setMensagem({
+            tipo: 'sucesso',
+            texto: `Família "${resultado.familia?.nome}" criada com sucesso! Faça login abaixo.`,
+          })
+          setModoCadastro(false)
+        } else {
+          router.push('/')
+          router.refresh()
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({
-          email,
+          email: email.trim(),
           password: senha,
         })
         if (error) throw error
@@ -109,6 +148,67 @@ export default function LoginPage() {
         )}
 
         <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {modoCadastro && (
+            <>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setTipoCadastro('nova_familia')}
+                  className={`btn ${tipoCadastro === 'nova_familia' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ flex: 1, fontSize: '0.78rem', padding: '8px' }}
+                >
+                  🏠 Criar Nova Família
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTipoCadastro('convite')}
+                  className={`btn ${tipoCadastro === 'convite' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ flex: 1, fontSize: '0.78rem', padding: '8px' }}
+                >
+                  🔑 Tenho Código
+                </button>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Seu Nome</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Ex: João Silva"
+                  value={nomeUsuario}
+                  onChange={(e) => setNomeUsuario(e.target.value)}
+                  required
+                />
+              </div>
+
+              {tipoCadastro === 'nova_familia' ? (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Nome da Família / Casa</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Ex: Família Silva"
+                    value={nomeFamilia}
+                    onChange={(e) => setNomeFamilia(e.target.value)}
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Código de Convite da Família</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Ex: MARTEL"
+                    value={codigoConvite}
+                    onChange={(e) => setCodigoConvite(e.target.value.toUpperCase())}
+                    required
+                  />
+                </div>
+              )}
+            </>
+          )}
+
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">E-mail</label>
             <input
@@ -134,7 +234,13 @@ export default function LoginPage() {
           </div>
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '8px', height: '42px' }} disabled={carregando}>
-            {carregando ? 'Autenticando...' : modoCadastro ? 'Cadastrar' : 'Entrar no Sistema'}
+            {carregando
+              ? 'Processando...'
+              : modoCadastro
+                ? tipoCadastro === 'nova_familia'
+                  ? 'Criar Família & Entrar'
+                  : 'Entrar na Família'
+                : 'Entrar no Sistema'}
           </button>
         </form>
 
@@ -147,7 +253,7 @@ export default function LoginPage() {
             }}
             style={{ background: 'none', border: 'none', color: 'var(--cor-primaria)', fontSize: '0.85rem', cursor: 'pointer', fontWeight: 500 }}
           >
-            {modoCadastro ? 'Já possui conta? Faça login' : 'Não tem conta? Cadastrar novo membro'}
+            {modoCadastro ? 'Já possui conta? Faça login' : 'Nova família ou membro convidado? Cadastre-se'}
           </button>
         </div>
       </div>

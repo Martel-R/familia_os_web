@@ -5,6 +5,7 @@ import styles from './layout.module.css'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { ChatFlutuante } from '@/components/chat/ChatFlutuante'
+import { FamiliaProvider } from '@/lib/tenant/FamiliaContext'
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -12,28 +13,32 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
   if (isLoginPage) {
     return (
-      <div
-        style={{
-          minHeight: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: 'var(--bg-app)',
-        }}
-      >
-        {children}
-      </div>
+      <FamiliaProvider>
+        <div
+          style={{
+            minHeight: '100vh',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'var(--bg-app)',
+          }}
+        >
+          {children}
+        </div>
+      </FamiliaProvider>
     )
   }
 
   return (
-    <div className={styles.container}>
-      <Sidebar />
-      <div className={styles.mainArea}>
-        <Header />
-        <main className={styles.conteudo}>{children}</main>
+    <FamiliaProvider>
+      <div className={styles.container}>
+        <Sidebar />
+        <div className={styles.mainArea}>
+          <Header />
+          <main className={styles.conteudo}>{children}</main>
+        </div>
+        <ChatFlutuante />
       </div>
-      <ChatFlutuante />
-    </div>
+    </FamiliaProvider>
   )
 }

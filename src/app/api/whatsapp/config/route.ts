@@ -1,19 +1,36 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { NextRequest, NextResponse } from 'next/server'
+import { createSupabaseAdmin, DEFAULT_FAMILIA_ID } from '@/lib/supabase/admin'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://api-supabase.martel.page'
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  db: { schema: 'familialm' }
-})
+const supabase = createSupabaseAdmin()
 
-export async function GET() {
+function obterConfigId(familiaId?: string | null) {
+  if (!familiaId || familiaId === DEFAULT_FAMILIA_ID) {
+    return 'evolution_whatsapp'
+  }
+  return `evolution_whatsapp:${familiaId}`
+}
+
+export async function GET(request: NextRequest) {
   try {
-    const { data, error } = await supabase
+    const { searchParams } = new URL(request.url)
+    const familiaId = searchParams.get('familiaId')
+    const configId = obterConfigId(familiaId)
+
+    let { data, error } = await supabase
       .from('configuracoes_casa')
       .select('valor, atualizado_em')
-      .eq('id', 'evolution_whatsapp')
+      .eq('id', configId)
       .maybeSingle()
+
+    if (!data && configId !== 'evolution_whatsapp') {
+      const fallback = await supabase
+        .from('configuracoes_casa')
+        .select('valor, atualizado_em')
+        .eq('id', 'evolution_whatsapp')
+        .maybeSingle()
+      data = fallback.data
+      error = fallback.error
+    }
 
     if (error) throw error
 
@@ -41,7 +58,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { serverUrl, apiKey, instanceName } = body
+    const { serverUrl, apiKey, instanceName, familiaId } = body
 
     if (!serverUrl || !apiKey || !instanceName) {
       return NextResponse.json(
@@ -60,8 +77,10 @@ export async function POST(request: Request) {
       ativo: true,
     }
 
+    const configId = obterConfigId(familiaId)
+
     const { error } = await supabase.from('configuracoes_casa').upsert({
-      id: 'evolution_whatsapp',
+      id: configId,
       valor: payload,
       atualizado_em: new Date().toISOString(),
     })

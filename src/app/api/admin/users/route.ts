@@ -1,64 +1,79 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase/client'
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://api-supabase.martel.page'
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+import {
+  createSupabaseAdmin,
+  createSupabaseAuthAdmin,
+  DEFAULT_FAMILIA_ID,
+} from '@/lib/supabase/admin'
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password, nome, perfil, avatar_url, saldo_moedas, cor_tema } = await req.json()
+    const {
+      email,
+      password,
+      nome,
+      perfil,
+      avatar_url,
+      saldo_moedas,
+      cor_tema,
+      familia_id,
+    } = await req.json()
 
     if (!email || !password || !nome) {
       return NextResponse.json({ error: 'E-mail, senha e nome são obrigatórios.' }, { status: 400 })
     }
 
-    // 1. Criar usuário no Supabase Auth
-    const authRes = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
+    const familiaAlvoId = familia_id || DEFAULT_FAMILIA_ID
+    const supabaseAdmin = createSupabaseAdmin()
+    const supabaseAuthAdmin = createSupabaseAuthAdmin()
+
+    // 1. Criar usuário confirmado no Supabase Auth (mesma instância do Signage TV)
+    const { data: authData, error: authError } = await supabaseAuthAdmin.auth.admin.createUser({
+      email: email.trim(),
+      password,
+      email_confirm: true,
+      user_metadata: {
+        app: 'familia_os',
+        name: nome.trim(),
+        nome: nome.trim(),
+        perfil: perfil || 'filho_membro',
+        familia_id: familiaAlvoId,
       },
-      body: JSON.stringify({
-        email,
-        password,
-        data: { name: nome },
-      }),
     })
 
-    const authData = await authRes.json()
-
-    if (!authRes.ok) {
+    if (authError) {
       return NextResponse.json(
-        { error: authData.msg || authData.error_description || 'Erro ao criar usuário no Supabase Auth.' },
-        { status: authRes.status }
+        { error: authError.message || 'Erro ao criar usuário no Supabase Auth.' },
+        { status: 400 }
       )
     }
 
-    const userId = authData.id || authData.user?.id
+    const userId = authData.user?.id
 
     if (userId) {
-      // 2. Atualizar ou garantir informações adicionais no perfil familialm.usuarios
-      const { error: errUpdate } = await supabase
-        .from('usuarios')
-        .upsert({
-          id: userId,
-          auth_user_id: userId,
-          email,
-          nome,
-          perfil: perfil || 'pai_admin',
-          saldo_moedas: parseInt(saldo_moedas) || 0,
-          avatar_url: avatar_url || '👤',
-          cor_tema: cor_tema || '#4f46e5',
-          ativo: true,
-        })
+      // 2. Atualizar ou inserir perfil em familialm.usuarios com o familia_id do tenant
+      const payloadUsuario: Record<string, any> = {
+        id: userId,
+        auth_user_id: userId,
+        familia_id: familiaAlvoId,
+        email: email.trim(),
+        nome: nome.trim(),
+        perfil: perfil || 'filho_membro',
+        saldo_moedas: parseInt(saldo_moedas) || 0,
+        avatar_url: avatar_url || '👤',
+        cor_tema: cor_tema || '#4f46e5',
+        ativo: true,
+      }
+
+      const { error: errUpdate } = await supabaseAdmin.from('usuarios').upsert(payloadUsuario)
 
       if (errUpdate) {
-        console.error('Erro ao atualizar perfil familialm.usuarios:', errUpdate)
+        // Fallback caso a coluna familia_id ainda não tenha sido aplicada no banco remoto
+        delete payloadUsuario.familia_id
+        await supabaseAdmin.from('usuarios').upsert(payloadUsuario)
       }
     }
 
-    return NextResponse.json({ success: true, user: authData.user || authData })
+    return NextResponse.json({ success: true, user: authData.user })
   } catch (err: any) {
     console.error('Erro no cadastro de usuário:', err)
     return NextResponse.json({ error: err.message || 'Erro interno.' }, { status: 500 })

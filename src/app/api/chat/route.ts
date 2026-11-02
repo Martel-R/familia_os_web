@@ -4,7 +4,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
 
-    // O Next.js (servidor) pode chamar o container do AI via rede interna ou porta mapeada
+    // O Next.js (servidor) pode chamar o container do AI via rede interna, domínio público ou porta mapeada
     const aiUrl =
       process.env.AI_API_URL ||
       process.env.NEXT_PUBLIC_AI_API_URL ||
@@ -18,12 +18,19 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify(body),
       })
     } catch {
-      // Fallback para localhost caso esteja fora da rede docker
-      res = await fetch(`http://127.0.0.1:8001/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+      try {
+        res = await fetch(`https://ai-familia.martel.page/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      } catch {
+        res = await fetch(`http://127.0.0.1:8001/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      }
     }
 
     if (!res.ok) {

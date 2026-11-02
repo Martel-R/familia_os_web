@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase/client'
+import { useFamilia, DEFAULT_FAMILIA_ID } from '@/lib/tenant/FamiliaContext'
 
 interface Credencial {
   id: string
@@ -20,6 +21,11 @@ interface WifiFamiliar {
 }
 
 export default function CofrePage() {
+  const { familiaId } = useFamilia()
+  const wifiConfigKey =
+    !familiaId || familiaId === DEFAULT_FAMILIA_ID
+      ? 'WIFI_PRINCIPAL'
+      : `WIFI_PRINCIPAL:${familiaId}`
   const [credenciais, setCredenciais] = useState<Credencial[]>([])
   const [wifi, setWifi] = useState<WifiFamiliar | null>(null)
   const [visibilidade, setVisibilidade] = useState<{ [id: string]: boolean }>({})
@@ -54,8 +60,8 @@ export default function CofrePage() {
       const { data: configData } = await supabase
         .from('configuracoes_casa')
         .select('valor')
-        .eq('id', 'WIFI_PRINCIPAL')
-        .single()
+        .eq('id', wifiConfigKey)
+        .maybeSingle()
 
       if (configData && configData.valor) {
         const wifiVal = configData.valor as any
@@ -72,7 +78,7 @@ export default function CofrePage() {
 
   useEffect(() => {
     carregarDados()
-  }, [])
+  }, [wifiConfigKey])
 
   const toggleVisibilidade = (id: string) => {
     setVisibilidade((prev) => ({ ...prev, [id]: !prev[id] }))
@@ -121,7 +127,7 @@ export default function CofrePage() {
       }
       const { error } = await supabase
         .from('configuracoes_casa')
-        .upsert({ id: 'WIFI_PRINCIPAL', valor })
+        .upsert({ id: wifiConfigKey, valor })
 
       if (error) throw error
       setWifi(valor)

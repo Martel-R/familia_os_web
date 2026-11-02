@@ -2,9 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase/client'
+import { useFamilia } from '@/lib/tenant/FamiliaContext'
 
 interface Usuario {
   id: string
+  familia_id?: string
   nome: string
   email?: string
   perfil: 'pai_admin' | 'filho_membro' | 'cuidador'
@@ -19,6 +21,7 @@ interface Usuario {
 const EMOJIS_PADRAO = ['👨', '👩', '👦', '👧', '👶', '👵', '🧓', '🦸', '🧚', '🐱', '🐶', '⭐']
 
 export default function UsuariosPage() {
+  const { familiaId, familia } = useFamilia()
   const [usuarios, setUsuarios] = useState<Usuario[]>([])
   const [carregando, setCarregando] = useState(true)
   const [filtroStatus, setFiltroStatus] = useState<'todos' | 'ativos' | 'inativos'>('todos')
@@ -61,7 +64,12 @@ export default function UsuariosPage() {
       if (error) {
         console.error('Erro ao buscar usuários:', error)
       } else if (data) {
-        setUsuarios(data)
+        // Filtra pelo tenant atual (ou mantém registros ativos caso familia_id ainda seja nulo)
+        const filtrados = data.filter((u: any) => {
+          if (u.familia_id) return u.familia_id === familiaId
+          return u.ativo !== false
+        })
+        setUsuarios(filtrados)
       }
     } finally {
       setCarregando(false)
@@ -70,7 +78,7 @@ export default function UsuariosPage() {
 
   useEffect(() => {
     carregarUsuarios()
-  }, [])
+  }, [familiaId])
 
   const abrirCriacao = () => {
     setNovoEmail('')
@@ -100,6 +108,7 @@ export default function UsuariosPage() {
           saldo_moedas: parseInt(novoSaldoMoedas) || 0,
           avatar_url: novoAvatar,
           cor_tema: novoCorTema,
+          familia_id: familiaId,
         }),
       })
 
@@ -250,10 +259,11 @@ export default function UsuariosPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, letterSpacing: '-0.025em' }}>
-            Usuários & Membros da Família
+            Usuários & Membros — {familia.nome || 'Minha Família'}
           </h1>
           <p style={{ color: 'var(--texto-secundario)', fontSize: '0.875rem', marginTop: '4px' }}>
-            Todos os usuários sincronizados com o Supabase Auth com e-mail, permissões e status.
+            Membros vinculados a esta família no Supabase Auth • Código de convite:{' '}
+            <strong>{familia.codigo_convite || 'MARTEL'}</strong>
           </p>
         </div>
 

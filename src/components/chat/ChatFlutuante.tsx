@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import styles from './chat.module.css'
+import { useFamilia } from '@/lib/tenant/FamiliaContext'
 
 interface Mensagem {
   id: string
@@ -16,6 +17,7 @@ const SUGESTOES = [
 ]
 
 export function ChatFlutuante() {
+  const { familiaId } = useFamilia()
   const [aberto, setAberto] = useState(false)
   const [mensagens, setMensagens] = useState<Mensagem[]>([
     {
@@ -51,7 +53,7 @@ export function ChatFlutuante() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pergunta: perguntaTexto }),
+        body: JSON.stringify({ pergunta: perguntaTexto, familia_id: familiaId }),
       })
 
       if (!response.ok) {
