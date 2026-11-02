@@ -125,7 +125,24 @@ export function Header() {
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <a
+            href="/api/download/apk"
+            download="familia-os.apk"
+            className="btn btn-secondary"
+            style={{
+              padding: '5px 10px',
+              fontSize: '0.75rem',
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+            }}
+            title="Baixar a versão mais recente do aplicativo Android (.APK)"
+          >
+            <span>📲</span>
+            <span>Baixar App (.APK)</span>
+          </a>
           {usuarioEmail ? (
             <>
               <div style={{ textAlign: 'right' }}>

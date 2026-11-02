@@ -244,7 +244,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div style={{ textAlign: 'center', marginTop: '20px' }}>
+        <div style={{ textAlign: 'center', marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <button
             type="button"
             onClick={() => {
@@ -255,6 +255,26 @@ export default function LoginPage() {
           >
             {modoCadastro ? 'Já possui conta? Faça login' : 'Nova família ou membro convidado? Cadastre-se'}
           </button>
+
+          <div style={{ borderTop: '1px solid var(--borda)', paddingTop: '12px' }}>
+            <a
+              href="/api/download/apk"
+              download="familia-os.apk"
+              className="btn btn-secondary"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                fontSize: '0.8rem',
+                textDecoration: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+              }}
+            >
+              <span>📲 Baixar Aplicativo Android (.APK)</span>
+            </a>
+          </div>
         </div>
       </div>
     </div>

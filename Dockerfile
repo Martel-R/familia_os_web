@@ -24,6 +24,10 @@ ENV SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY
 ENV NEXT_PUBLIC_AI_API_URL=$NEXT_PUBLIC_AI_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Baixa a ultima versao compilada do APK Android do GitHub Releases para /public/downloads/familia-os.apk
+RUN mkdir -p public/downloads && \
+    wget -q https://github.com/Martel-R/familia_os_android/releases/download/latest-apk/familia-os.apk -O public/downloads/familia-os.apk || true
+
 RUN npm run build
 
 # 3. Production Runner

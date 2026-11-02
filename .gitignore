@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# android apk binary (baixado no build docker e via /api/download/apk)
+public/downloads/*.apk
