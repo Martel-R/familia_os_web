@@ -60,7 +60,7 @@ export default function ComprasPage() {
 
   // Campos do formulário manual rápido
   const [fornecedor, setFornecedor] = useState('')
-  const [dataCompraManual, setDataCompraManual] = useState(() => new Date().toISOString().split('T')[0])
+  const [dataCompraManual, setDataCompraManual] = useState('')
   const [valorTotal, setValorTotal] = useState('')
   const [arquivoRecibo, setArquivoRecibo] = useState<File | null>(null)
   const [itensManuais, setItensManuais] = useState<ItemExtraidoIA[]>([])
@@ -71,7 +71,7 @@ export default function ComprasPage() {
   const [analisandoIa, setAnalisandoIa] = useState(false)
   const [erroIa, setErroIa] = useState<string | null>(null)
   const [iaFornecedor, setIaFornecedor] = useState('')
-  const [iaDataCompra, setIaDataCompra] = useState(() => new Date().toISOString().split('T')[0])
+  const [iaDataCompra, setIaDataCompra] = useState('')
   const [iaValorTotal, setIaValorTotal] = useState('')
   const [iaItens, setIaItens] = useState<ItemExtraidoIA[]>([])
   const [lancarEmFinancas, setLancarEmFinancas] = useState(true)
@@ -120,6 +120,12 @@ export default function ComprasPage() {
       setCarregando(false)
     }
   }
+
+  useEffect(() => {
+    const hoje = new Date().toISOString().split('T')[0]
+    setDataCompraManual(prev => prev || hoje)
+    setIaDataCompra(prev => prev || hoje)
+  }, [])
 
   useEffect(() => {
     if (familiaId) {
