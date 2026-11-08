@@ -84,6 +84,13 @@ export default function ComprasPage() {
   const [novoItemValor, setNovoItemValor] = useState('')
   const [novoItemCat, setNovoItemCat] = useState('Alimentação')
 
+  // Edição inline de item já salvo
+  const [itemEditandoId, setItemEditandoId] = useState<string | null>(null)
+  const [editItemNome, setEditItemNome] = useState('')
+  const [editItemQtd, setEditItemQtd] = useState('1')
+  const [editItemValor, setEditItemValor] = useState('0')
+  const [editItemCat, setEditItemCat] = useState('Alimentação')
+
   const carregarDados = async () => {
     try {
       setCarregando(true)
@@ -370,6 +377,52 @@ export default function ComprasPage() {
       await carregarDados()
     } catch (err) {
       console.error(err)
+    }
+  }
+
+  const iniciarEdicaoItem = (item: ItemCompra) => {
+    setItemEditandoId(item.id)
+    setEditItemNome(item.nome_produto)
+    setEditItemQtd(String(item.quantidade || 1))
+    setEditItemValor(String(item.valor_unitario || 0))
+    setEditItemCat(item.categoria_sugerida || 'Alimentação')
+  }
+
+  const salvarEdicaoItem = async (item: ItemCompra) => {
+    if (!editItemNome.trim()) return
+    const qtd = parseFloat(editItemQtd) || 1
+    const val = parseFloat(editItemValor) || 0
+    try {
+      const { error } = await supabase
+        .from('compras_itens_extraidos')
+        .update({
+          nome_produto: editItemNome.trim(),
+          quantidade: qtd,
+          valor_unitario: val,
+          categoria_sugerida: editItemCat || 'Geral',
+        })
+        .eq('id', item.id)
+      if (error) throw error
+
+      const { data: itensAtualizados } = await supabase
+        .from('compras_itens_extraidos')
+        .select('quantidade, valor_unitario')
+        .eq('recibo_id', item.recibo_id)
+      if (itensAtualizados && itensAtualizados.length > 0) {
+        const novoTotal = itensAtualizados.reduce(
+          (acc, it: any) => acc + Number(it.quantidade || 1) * Number(it.valor_unitario || 0),
+          0
+        )
+        await supabase
+          .from('compras_recibos')
+          .update({ valor_total: Number(novoTotal.toFixed(2)) })
+          .eq('id', item.recibo_id)
+      }
+
+      setItemEditandoId(null)
+      await carregarDados()
+    } catch (err: any) {
+      alert('Erro ao atualizar item: ' + err.message)
     }
   }
 
@@ -880,42 +933,135 @@ export default function ComprasPage() {
                           </thead>
                           <tbody>
                             {itensDaNota.map(item => {
-                              const subtotal = Number(item.quantidade || 1) * Number(item.valor_unitario || 0)
+                              const estaEditando = itemEditandoId === item.id
+                              const subtotal = estaEditando
+                                ? (parseFloat(editItemQtd) || 1) * (parseFloat(editItemValor) || 0)
+                                : Number(item.quantidade || 1) * Number(item.valor_unitario || 0)
                               return (
                                 <tr key={item.id}>
-                                  <td style={{ fontWeight: 600 }}>{item.nome_produto}</td>
-                                  <td>
-                                    <span
-                                      style={{
-                                        fontSize: '0.72rem',
-                                        padding: '3px 8px',
-                                        borderRadius: '999px',
-                                        background: 'rgba(56, 189, 248, 0.14)',
-                                        color: '#38bdf8',
-                                      }}
-                                    >
-                                      {item.categoria_sugerida || 'Geral'}
-                                    </span>
+                                  <td style={{ fontWeight: 600 }}>
+                                    {estaEditando ? (
+                                      <input
+                                        type="text"
+                                        className="input"
+                                        value={editItemNome}
+                                        onChange={e => setEditItemNome(e.target.value)}
+                                        style={{ padding: '4px 8px', fontSize: '0.82rem' }}
+                                      />
+                                    ) : (
+                                      item.nome_produto
+                                    )}
                                   </td>
-                                  <td>{Number(item.quantidade || 1)}</td>
-                                  <td>R$ {Number(item.valor_unitario || 0).toFixed(2)}</td>
+                                  <td>
+                                    {estaEditando ? (
+                                      <select
+                                        className="input"
+                                        value={editItemCat}
+                                        onChange={e => setEditItemCat(e.target.value)}
+                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                      >
+                                        {CATEGORIAS_COMPRAS.map(c => (
+                                          <option key={c} value={c}>
+                                            {c}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <span
+                                        style={{
+                                          fontSize: '0.72rem',
+                                          padding: '3px 8px',
+                                          borderRadius: '999px',
+                                          background: 'rgba(56, 189, 248, 0.14)',
+                                          color: '#38bdf8',
+                                        }}
+                                      >
+                                        {item.categoria_sugerida || 'Geral'}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    {estaEditando ? (
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        className="input"
+                                        value={editItemQtd}
+                                        onChange={e => setEditItemQtd(e.target.value)}
+                                        style={{ width: '72px', padding: '4px 6px', fontSize: '0.82rem' }}
+                                      />
+                                    ) : (
+                                      Number(item.quantidade || 1)
+                                    )}
+                                  </td>
+                                  <td>
+                                    {estaEditando ? (
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        className="input"
+                                        value={editItemValor}
+                                        onChange={e => setEditItemValor(e.target.value)}
+                                        style={{ width: '92px', padding: '4px 6px', fontSize: '0.82rem' }}
+                                      />
+                                    ) : (
+                                      `R$ ${Number(item.valor_unitario || 0).toFixed(2)}`
+                                    )}
+                                  </td>
                                   <td style={{ fontWeight: 700, color: 'var(--cor-sucesso)' }}>
                                     R$ {subtotal.toFixed(2)}
                                   </td>
-                                  <td style={{ textAlign: 'right' }}>
-                                    <button
-                                      type="button"
-                                      onClick={() => excluirItemRecibo(item.id)}
-                                      style={{
-                                        background: 'none',
-                                        border: 'none',
-                                        cursor: 'pointer',
-                                        color: 'var(--cor-perigo)',
-                                      }}
-                                      title="Remover item"
-                                    >
-                                      ✕
-                                    </button>
+                                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                    {estaEditando ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="btn btn-primary"
+                                          onClick={() => salvarEdicaoItem(item)}
+                                          style={{ padding: '4px 10px', fontSize: '0.75rem', marginRight: '6px' }}
+                                        >
+                                          ✓ Salvar
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn btn-secondary"
+                                          onClick={() => setItemEditandoId(null)}
+                                          style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                                        >
+                                          Cancelar
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => iniciarEdicaoItem(item)}
+                                          style={{
+                                            background: 'none',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            color: '#38bdf8',
+                                            marginRight: '8px',
+                                          }}
+                                          title="Editar item"
+                                        >
+                                          ✏️
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => excluirItemRecibo(item.id)}
+                                          style={{
+                                            background: 'none',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            color: 'var(--cor-perigo)',
+                                          }}
+                                          title="Remover item"
+                                        >
+                                          ✕
+                                        </button>
+                                      </>
+                                    )}
                                   </td>
                                 </tr>
                               )
