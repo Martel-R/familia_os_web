@@ -1,8 +1,5 @@
 import { NextResponse } from 'next/server'
 
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
-
 const VERSION_JSON_URL =
   'https://github.com/Martel-R/familia_os_android/releases/download/latest-apk/version.json'
 
