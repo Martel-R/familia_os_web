@@ -4,6 +4,7 @@ export async function POST(req: NextRequest) {
   try {
     const incomingForm = await req.formData()
     const file = incomingForm.get('file') as File | null
+    const familiaId = (incomingForm.get('familia_id') as string | null) || req.nextUrl.searchParams.get('familia_id') || ''
 
     if (!file) {
       return NextResponse.json(
@@ -21,10 +22,11 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_AI_API_URL ||
       'http://familia-os-ai:8000'
 
+    const qs = familiaId ? `?familia_id=${encodeURIComponent(familiaId)}` : ''
     const candidateUrls = [
-      `${aiUrl}/api/ocr/receipt`,
-      'https://ai-familia.martel.page/api/ocr/receipt',
-      'http://127.0.0.1:8001/api/ocr/receipt',
+      `${aiUrl}/api/ocr/receipt${qs}`,
+      `https://ai-familia.martel.page/api/ocr/receipt${qs}`,
+      `http://127.0.0.1:8001/api/ocr/receipt${qs}`,
     ]
 
     let lastError = 'Falha ao conectar ao serviço de IA'

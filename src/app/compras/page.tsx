@@ -8,6 +8,7 @@ interface ItemCompra {
   id: string
   recibo_id: string
   familia_id?: string
+  codigo_produto?: string | null
   nome_produto: string
   quantidade: number
   valor_unitario: number
@@ -27,10 +28,22 @@ interface Recibo {
 
 interface ItemExtraidoIA {
   selecionado: boolean
+  codigo_produto?: string
   nome_produto: string
   quantidade: number
   valor_unitario: number
   categoria_sugerida: string
+}
+
+function normalizarFornecedor(fornecedor?: string | null): string {
+  return (fornecedor || '').trim().replace(/\s+/g, ' ').toUpperCase()
+}
+
+function normalizarCodigoProduto(codigo?: string | null): string {
+  const limpo = (codigo || '').trim().replace(/\s+/g, '').toUpperCase()
+  if (!limpo || limpo === 'NULL') return ''
+  const semZeros = limpo.replace(/^0+(?=\d)/, '')
+  return semZeros || limpo
 }
 
 const CATEGORIAS_COMPRAS = [
@@ -79,6 +92,7 @@ export default function ComprasPage() {
 
   // Adicionar item avulso em recibo já existente
   const [reciboAdicionandoItem, setReciboAdicionandoItem] = useState<string | null>(null)
+  const [novoItemCodigo, setNovoItemCodigo] = useState('')
   const [novoItemNome, setNovoItemNome] = useState('')
   const [novoItemQtd, setNovoItemQtd] = useState('1')
   const [novoItemValor, setNovoItemValor] = useState('')
@@ -86,10 +100,124 @@ export default function ComprasPage() {
 
   // Edição inline de item já salvo
   const [itemEditandoId, setItemEditandoId] = useState<string | null>(null)
+  const [editItemCodigo, setEditItemCodigo] = useState('')
   const [editItemNome, setEditItemNome] = useState('')
   const [editItemQtd, setEditItemQtd] = useState('1')
   const [editItemValor, setEditItemValor] = useState('0')
   const [editItemCat, setEditItemCat] = useState('Alimentação')
+
+  const sincronizarItemNoCatalogo = async (
+    fornecedorNome: string | undefined | null,
+    codigoProduto: string | undefined | null,
+    nomeProduto: string,
+    categoriaSugerida: string | undefined | null,
+    valorUnitario: number
+  ) => {
+    const codNorm = normalizarCodigoProduto(codigoProduto)
+    const fornLimpo = (fornecedorNome || '').trim() || 'Supermercado'
+    const fornNorm = normalizarFornecedor(fornLimpo)
+    if (!codNorm || !fornNorm || !nomeProduto.trim()) return
+
+    try {
+      const { data: existentes } = await supabase
+        .from('compras_catalogo_produtos')
+        .select('id')
+        .eq('familia_id', familiaId)
+        .eq('fornecedor_normalizado', fornNorm)
+        .eq('codigo_produto', codNorm)
+
+      if (existentes && existentes.length > 0) {
+        await supabase
+          .from('compras_catalogo_produtos')
+          .update({
+            fornecedor: fornLimpo,
+            nome_produto: nomeProduto.trim(),
+            categoria_sugerida: (categoriaSugerida || 'Alimentação').trim() || 'Alimentação',
+            ultimo_valor_unitario: Number(valorUnitario) || 0,
+            atualizado_em: new Date().toISOString(),
+          })
+          .eq('id', existentes[0].id)
+      } else {
+        await supabase.from('compras_catalogo_produtos').insert([
+          {
+            id: crypto.randomUUID(),
+            familia_id: familiaId,
+            fornecedor: fornLimpo,
+            fornecedor_normalizado: fornNorm,
+            codigo_produto: codNorm,
+            nome_produto: nomeProduto.trim(),
+            categoria_sugerida: (categoriaSugerida || 'Alimentação').trim() || 'Alimentação',
+            ultimo_valor_unitario: Number(valorUnitario) || 0,
+          },
+        ])
+      }
+    } catch {}
+  }
+
+  const reconciliarItensComCatalogo = async (
+    fornecedorNome: string,
+    itens: ItemExtraidoIA[]
+  ): Promise<ItemExtraidoIA[]> => {
+    if (!itens.length) return itens
+    try {
+      const { data: catalogo } = await supabase
+        .from('compras_catalogo_produtos')
+        .select('fornecedor_normalizado,fornecedor,codigo_produto,nome_produto,categoria_sugerida')
+        .eq('familia_id', familiaId)
+
+      if (!catalogo || !catalogo.length) return itens
+
+      const fornRecibo = normalizarFornecedor(fornecedorNome)
+      const mapaExato = new Map<string, any>()
+      const mapaPorCodigo = new Map<string, any[]>()
+
+      for (const reg of catalogo) {
+        const fCat = normalizarFornecedor(reg.fornecedor_normalizado || reg.fornecedor)
+        const cRaw = String(reg.codigo_produto || '').trim().toUpperCase()
+        const cNorm = normalizarCodigoProduto(cRaw)
+        if (!cNorm) continue
+        mapaExato.set(`${fCat}::${cRaw}`, reg)
+        mapaExato.set(`${fCat}::${cNorm}`, reg)
+        if (!mapaPorCodigo.has(cRaw)) mapaPorCodigo.set(cRaw, [])
+        mapaPorCodigo.get(cRaw)!.push({ fCat, reg })
+        if (cNorm !== cRaw) {
+          if (!mapaPorCodigo.has(cNorm)) mapaPorCodigo.set(cNorm, [])
+          mapaPorCodigo.get(cNorm)!.push({ fCat, reg })
+        }
+      }
+
+      return itens.map(item => {
+        const codNorm = normalizarCodigoProduto(item.codigo_produto)
+        if (!codNorm) return item
+        const codUpper = String(item.codigo_produto || '').trim().toUpperCase()
+
+        let match =
+          mapaExato.get(`${fornRecibo}::${codUpper}`) ||
+          mapaExato.get(`${fornRecibo}::${codNorm}`)
+
+        if (!match && fornRecibo) {
+          const candidatos =
+            mapaPorCodigo.get(codUpper) || mapaPorCodigo.get(codNorm) || []
+          const achado = candidatos.find(
+            c => c.fCat && (c.fCat.includes(fornRecibo) || fornRecibo.includes(c.fCat))
+          )
+          if (achado) match = achado.reg
+        }
+
+        if (match && match.nome_produto) {
+          return {
+            ...item,
+            codigo_produto: codNorm,
+            nome_produto: String(match.nome_produto).trim(),
+            categoria_sugerida: String(match.categoria_sugerida || item.categoria_sugerida || 'Alimentação'),
+          }
+        }
+        return { ...item, codigo_produto: codNorm }
+      })
+    } catch {
+      return itens
+    }
+  }
 
   const carregarDados = async () => {
     try {
@@ -170,8 +298,9 @@ export default function ComprasPage() {
     try {
       const formData = new FormData()
       formData.append('file', targetFile)
+      formData.append('familia_id', familiaId)
 
-      const res = await fetch('/api/ocr/receipt', {
+      const res = await fetch(`/api/ocr/receipt?familia_id=${encodeURIComponent(familiaId)}`, {
         method: 'POST',
         body: formData,
       })
@@ -181,12 +310,14 @@ export default function ComprasPage() {
         throw new Error(data.error || 'Falha ao extrair dados da nota com a IA.')
       }
 
-      setIaFornecedor(data.fornecedor || 'Supermercado / Estabelecimento')
+      const fornExtraido = data.fornecedor || 'Supermercado / Estabelecimento'
+      setIaFornecedor(fornExtraido)
       setIaDataCompra(data.data_compra || new Date().toISOString().split('T')[0])
 
-      const itensExtraidos: ItemExtraidoIA[] = Array.isArray(data.itens)
+      const itensExtraidosBrutos: ItemExtraidoIA[] = Array.isArray(data.itens)
         ? data.itens.map((it: any) => ({
             selecionado: true,
+            codigo_produto: normalizarCodigoProduto(it.codigo_produto),
             nome_produto: String(it.nome_produto || 'Item'),
             quantidade: Number(it.quantidade) > 0 ? Number(it.quantidade) : 1,
             valor_unitario: Number(it.valor_unitario) || 0,
@@ -194,6 +325,7 @@ export default function ComprasPage() {
           }))
         : []
 
+      const itensExtraidos = await reconciliarItensComCatalogo(fornExtraido, itensExtraidosBrutos)
       setIaItens(itensExtraidos)
 
       const somaItens = itensExtraidos.reduce(
@@ -252,6 +384,7 @@ export default function ComprasPage() {
           id: crypto.randomUUID(),
           recibo_id: reciboId,
           familia_id: familiaId,
+          codigo_produto: normalizarCodigoProduto(it.codigo_produto) || null,
           nome_produto: it.nome_produto.trim(),
           quantidade: Number(it.quantidade) || 1,
           valor_unitario: Number(it.valor_unitario) || 0,
@@ -262,6 +395,18 @@ export default function ComprasPage() {
           .from('compras_itens_extraidos')
           .insert(payloadItens)
         if (errItens) throw errItens
+
+        for (const it of itensSelecionados) {
+          if (it.codigo_produto && it.codigo_produto.trim()) {
+            await sincronizarItemNoCatalogo(
+              iaFornecedor.trim(),
+              it.codigo_produto,
+              it.nome_produto,
+              it.categoria_sugerida,
+              Number(it.valor_unitario) || 0
+            )
+          }
+        }
       }
 
       if (lancarEmFinancas && valorFinal > 0) {
@@ -320,12 +465,25 @@ export default function ComprasPage() {
           id: crypto.randomUUID(),
           recibo_id: reciboId,
           familia_id: familiaId,
+          codigo_produto: normalizarCodigoProduto(it.codigo_produto) || null,
           nome_produto: it.nome_produto.trim(),
           quantidade: Number(it.quantidade) || 1,
           valor_unitario: Number(it.valor_unitario) || 0,
           categoria_sugerida: it.categoria_sugerida || 'Geral',
         }))
         await supabase.from('compras_itens_extraidos').insert(payloadItens)
+
+        for (const it of itensValidos) {
+          if (it.codigo_produto && it.codigo_produto.trim()) {
+            await sincronizarItemNoCatalogo(
+              fornecedor.trim(),
+              it.codigo_produto,
+              it.nome_produto,
+              it.categoria_sugerida,
+              Number(it.valor_unitario) || 0
+            )
+          }
+        }
       }
 
       setFornecedor('')
@@ -347,12 +505,15 @@ export default function ComprasPage() {
     if (!novoItemNome.trim()) return
     const qtd = parseFloat(novoItemQtd) || 1
     const val = parseFloat(novoItemValor) || 0
+    const codNorm = normalizarCodigoProduto(novoItemCodigo) || null
+    const reciboAlvo = recibos.find(r => r.id === reciboId)
 
     try {
       const novoItem = {
         id: crypto.randomUUID(),
         recibo_id: reciboId,
         familia_id: familiaId,
+        codigo_produto: codNorm,
         nome_produto: novoItemNome.trim(),
         quantidade: qtd,
         valor_unitario: val,
@@ -361,6 +522,17 @@ export default function ComprasPage() {
       const { error } = await supabase.from('compras_itens_extraidos').insert([novoItem])
       if (error) throw error
 
+      if (codNorm) {
+        await sincronizarItemNoCatalogo(
+          reciboAlvo?.fornecedor,
+          codNorm,
+          novoItemNome.trim(),
+          novoItemCat,
+          val
+        )
+      }
+
+      setNovoItemCodigo('')
       setNovoItemNome('')
       setNovoItemQtd('1')
       setNovoItemValor('')
@@ -382,6 +554,7 @@ export default function ComprasPage() {
 
   const iniciarEdicaoItem = (item: ItemCompra) => {
     setItemEditandoId(item.id)
+    setEditItemCodigo(item.codigo_produto || '')
     setEditItemNome(item.nome_produto)
     setEditItemQtd(String(item.quantidade || 1))
     setEditItemValor(String(item.valor_unitario || 0))
@@ -392,10 +565,13 @@ export default function ComprasPage() {
     if (!editItemNome.trim()) return
     const qtd = parseFloat(editItemQtd) || 1
     const val = parseFloat(editItemValor) || 0
+    const codNorm = normalizarCodigoProduto(editItemCodigo) || null
+    const reciboOrigem = recibos.find(r => r.id === item.recibo_id)
     try {
       const { error } = await supabase
         .from('compras_itens_extraidos')
         .update({
+          codigo_produto: codNorm,
           nome_produto: editItemNome.trim(),
           quantidade: qtd,
           valor_unitario: val,
@@ -403,6 +579,16 @@ export default function ComprasPage() {
         })
         .eq('id', item.id)
       if (error) throw error
+
+      if (codNorm) {
+        await sincronizarItemNoCatalogo(
+          reciboOrigem?.fornecedor,
+          codNorm,
+          editItemNome.trim(),
+          editItemCat,
+          val
+        )
+      }
 
       const { data: itensAtualizados } = await supabase
         .from('compras_itens_extraidos')
@@ -454,6 +640,7 @@ export default function ComprasPage() {
       const matchItem = itens.some(
         it =>
           it.nome_produto.toLowerCase().includes(termo) ||
+          (it.codigo_produto || '').toLowerCase().includes(termo) ||
           (it.categoria_sugerida || '').toLowerCase().includes(termo)
       )
       return matchFornecedor || matchItem
@@ -851,7 +1038,7 @@ export default function ComprasPage() {
                   </div>
                 </div>
 
-                {/* Formulário para adicionar item avulso na nota */}
+                  {/* Formulário para adicionar item avulso na nota */}
                 {reciboAdicionandoItem === r.id && (
                   <div
                     style={{
@@ -861,11 +1048,18 @@ export default function ComprasPage() {
                       background: 'rgba(255,255,255,0.03)',
                       border: '1px solid var(--borda)',
                       display: 'grid',
-                      gridTemplateColumns: '2fr 90px 110px 140px auto',
+                      gridTemplateColumns: '120px 2fr 90px 110px 140px auto',
                       gap: '8px',
                       alignItems: 'center',
                     }}
                   >
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Cód. (opcional)"
+                      value={novoItemCodigo}
+                      onChange={e => setNovoItemCodigo(e.target.value)}
+                    />
                     <input
                       type="text"
                       className="input"
@@ -923,6 +1117,7 @@ export default function ComprasPage() {
                         <table className="tabela">
                           <thead>
                             <tr>
+                              <th style={{ width: '110px' }}>Cód. Loja</th>
                               <th>Produto / Item Comprado</th>
                               <th>Categoria</th>
                               <th>Qtd</th>
@@ -939,6 +1134,32 @@ export default function ComprasPage() {
                                 : Number(item.quantidade || 1) * Number(item.valor_unitario || 0)
                               return (
                                 <tr key={item.id}>
+                                  <td style={{ fontFamily: 'monospace', fontSize: '0.78rem', color: 'var(--texto-secundario)' }}>
+                                    {estaEditando ? (
+                                      <input
+                                        type="text"
+                                        className="input"
+                                        placeholder="Código"
+                                        value={editItemCodigo}
+                                        onChange={e => setEditItemCodigo(e.target.value)}
+                                        style={{ width: '95px', padding: '4px 6px', fontSize: '0.78rem' }}
+                                      />
+                                    ) : item.codigo_produto ? (
+                                      <span
+                                        style={{
+                                          padding: '2px 6px',
+                                          borderRadius: '6px',
+                                          background: 'rgba(255,255,255,0.06)',
+                                          border: '1px solid var(--borda)',
+                                        }}
+                                        title={`Chave composta: ${r.fornecedor || 'Loja'} + #${item.codigo_produto}`}
+                                      >
+                                        #{item.codigo_produto}
+                                      </span>
+                                    ) : (
+                                      '-'
+                                    )}
+                                  </td>
                                   <td style={{ fontWeight: 600 }}>
                                     {estaEditando ? (
                                       <input
@@ -1272,7 +1493,8 @@ export default function ComprasPage() {
                     <thead>
                       <tr>
                         <th style={{ width: '36px' }}>✓</th>
-                        <th>Produto</th>
+                        <th style={{ width: '115px' }}>Cód. Loja</th>
+                        <th>Produto (Descrição Personalizável)</th>
                         <th style={{ width: '90px' }}>Qtd</th>
                         <th style={{ width: '115px' }}>Valor Unit. (R$)</th>
                         <th style={{ width: '150px' }}>Categoria</th>
@@ -1289,6 +1511,20 @@ export default function ComprasPage() {
                               onChange={e => {
                                 const copia = [...iaItens]
                                 copia[idx].selecionado = e.target.checked
+                                setIaItens(copia)
+                              }}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="text"
+                              className="input"
+                              placeholder="Código"
+                              style={{ padding: '6px 8px', fontSize: '0.78rem', fontFamily: 'monospace' }}
+                              value={item.codigo_produto || ''}
+                              onChange={e => {
+                                const copia = [...iaItens]
+                                copia[idx].codigo_produto = e.target.value
                                 setIaItens(copia)
                               }}
                             />
