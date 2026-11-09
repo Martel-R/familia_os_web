@@ -14,6 +14,8 @@ interface Credencial {
 }
 
 interface WifiFamiliar {
+  id?: string
+  apelido?: string
   nomeRedeSsid: string
   senhaRede: string
   tipoSeguranca: string
@@ -27,7 +29,7 @@ export default function CofrePage() {
       ? 'WIFI_PRINCIPAL'
       : `WIFI_PRINCIPAL:${familiaId}`
   const [credenciais, setCredenciais] = useState<Credencial[]>([])
-  const [wifi, setWifi] = useState<WifiFamiliar | null>(null)
+  const [redesWifi, setRedesWifi] = useState<WifiFamiliar[]>([])
   const [visibilidade, setVisibilidade] = useState<{ [id: string]: boolean }>({})
   const [carregando, setCarregando] = useState(true)
   const [salvando, setSalvando] = useState(false)
@@ -39,13 +41,15 @@ export default function CofrePage() {
   const [nivel, setNivel] = useState<'compartilhado' | 'master'>('compartilhado')
 
   // Formulário de WiFi
+  const [wifiEditId, setWifiEditId] = useState<string | null>(null)
+  const [wifiApelido, setWifiApelido] = useState('')
   const [wifiSsid, setWifiSsid] = useState('')
   const [wifiSenha, setWifiSenha] = useState('')
   const [wifiSeguranca, setWifiSeguranca] = useState('WPA2/WPA3')
   const [wifiVisitante, setWifiVisitante] = useState(false)
   const [editandoWifi, setEditandoWifi] = useState(false)
   const [salvandoWifi, setSalvandoWifi] = useState(false)
-  const [verWifi, setVerWifi] = useState(false)
+  const [verWifiMap, setVerWifiMap] = useState<{ [k: string]: boolean }>({})
 
   const carregarDados = async () => {
     try {
@@ -65,11 +69,22 @@ export default function CofrePage() {
 
       if (configData && configData.valor) {
         const wifiVal = configData.valor as any
-        setWifi(wifiVal)
-        setWifiSsid(wifiVal.nomeRedeSsid || '')
-        setWifiSenha(wifiVal.senhaRede || '')
-        setWifiSeguranca(wifiVal.tipoSeguranca || 'WPA2/WPA3')
-        setWifiVisitante(wifiVal.ehRedeVisitantes || false)
+        if (Array.isArray(wifiVal.redes) && wifiVal.redes.length > 0) {
+          setRedesWifi(wifiVal.redes)
+        } else if (wifiVal.nomeRedeSsid) {
+          setRedesWifi([
+            {
+              id: 'principal',
+              apelido: 'Wi-Fi Principal da Casa',
+              nomeRedeSsid: wifiVal.nomeRedeSsid,
+              senhaRede: wifiVal.senhaRede || '',
+              tipoSeguranca: wifiVal.tipoSeguranca || 'WPA2/WPA3',
+              ehRedeVisitantes: Boolean(wifiVal.ehRedeVisitantes),
+            },
+          ])
+        } else {
+          setRedesWifi([])
+        }
       }
     } finally {
       setCarregando(false)
@@ -115,27 +130,67 @@ export default function CofrePage() {
     }
   }
 
+  const persistirListaWifi = async (novaLista: WifiFamiliar[]) => {
+    const principal = novaLista[0] || {
+      nomeRedeSsid: '',
+      senhaRede: '',
+      tipoSeguranca: 'WPA2/WPA3',
+      ehRedeVisitantes: false,
+    }
+    const valor = {
+      nomeRedeSsid: principal.nomeRedeSsid,
+      senhaRede: principal.senhaRede,
+      tipoSeguranca: principal.tipoSeguranca,
+      ehRedeVisitantes: principal.ehRedeVisitantes,
+      redes: novaLista,
+    }
+    const { error } = await supabase
+      .from('configuracoes_casa')
+      .upsert({ id: wifiConfigKey, valor })
+    if (error) throw error
+    setRedesWifi(novaLista)
+  }
+
   const handleSalvarWifi = async (e: React.FormEvent) => {
     e.preventDefault()
     setSalvandoWifi(true)
     try {
-      const valor = {
-        nomeRedeSsid: wifiSsid,
-        senhaRede: wifiSenha,
-        tipoSeguranca: wifiSeguranca,
-        ehRedeVisitantes: wifiVisitante
+      const novaRede: WifiFamiliar = {
+        id: wifiEditId || `wifi-${Date.now()}`,
+        apelido: wifiApelido.trim() || wifiSsid.trim(),
+        nomeRedeSsid: wifiSsid.trim(),
+        senhaRede: wifiSenha.trim(),
+        tipoSeguranca: wifiSeguranca || 'WPA2/WPA3',
+        ehRedeVisitantes: wifiVisitante,
       }
-      const { error } = await supabase
-        .from('configuracoes_casa')
-        .upsert({ id: wifiConfigKey, valor })
-
-      if (error) throw error
-      setWifi(valor)
+      const lista = [...redesWifi]
+      const idx = lista.findIndex(
+        (r) =>
+          (wifiEditId && r.id === wifiEditId) ||
+          r.nomeRedeSsid.toLowerCase() === novaRede.nomeRedeSsid.toLowerCase()
+      )
+      if (idx >= 0) {
+        lista[idx] = novaRede
+      } else {
+        lista.push(novaRede)
+      }
+      await persistirListaWifi(lista)
       setEditandoWifi(false)
+      setWifiEditId(null)
     } catch (err: any) {
       alert('Erro ao salvar Wi-Fi: ' + err.message)
     } finally {
       setSalvandoWifi(false)
+    }
+  }
+
+  const handleExcluirWifi = async (idOuSsid: string) => {
+    if (!confirm('Deseja remover esta rede Wi-Fi da lista compartilhada?')) return
+    try {
+      const novaLista = redesWifi.filter((r) => (r.id || r.nomeRedeSsid) !== idOuSsid)
+      await persistirListaWifi(novaLista)
+    } catch (err: any) {
+      alert('Erro ao excluir Wi-Fi: ' + err.message)
     }
   }
 
@@ -163,24 +218,43 @@ export default function CofrePage() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '32px', marginBottom: '32px' }}>
-        {/* Painel Wi-Fi */}
+        {/* Painel Wi-Fi Compartilhado */}
         <div className="card" style={{ borderLeft: '4px solid var(--cor-sucesso)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '8px' }}>📶 Wi-Fi da Família</h2>
+              <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '8px' }}>
+                📶 Redes Wi-Fi Compartilhadas da Família ({redesWifi.length})
+              </h2>
               <p style={{ fontSize: '0.8rem', color: 'var(--texto-secundario)', marginBottom: '16px' }}>
-                Acesso rápido para compartilhar com convidados e visitantes.
+                Todas as redes Wi-Fi salvas aqui ficam disponíveis no App Android de todos os membros da família para conexão com 1 toque.
               </p>
             </div>
             {!editandoWifi && (
-              <button type="button" onClick={() => setEditandoWifi(true)} className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}>
-                ✏️ Editar Wi-Fi
+              <button
+                type="button"
+                onClick={() => {
+                  setWifiEditId(null)
+                  setWifiApelido('')
+                  setWifiSsid('')
+                  setWifiSenha('')
+                  setWifiSeguranca('WPA2/WPA3')
+                  setWifiVisitante(false)
+                  setEditandoWifi(true)
+                }}
+                className="btn btn-primary"
+                style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+              >
+                + Nova Rede Wi-Fi
               </button>
             )}
           </div>
 
-          {editandoWifi ? (
-            <form onSubmit={handleSalvarWifi} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'flex-end', backgroundColor: 'var(--bg-hover)', padding: '16px', borderRadius: 'var(--raio-md)' }}>
+          {editandoWifi && (
+            <form onSubmit={handleSalvarWifi} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'flex-end', backgroundColor: 'var(--bg-hover)', padding: '16px', borderRadius: 'var(--raio-md)', marginBottom: '16px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Local / Apelido</label>
+                <input type="text" className="input" placeholder="Ex: Casa 5G, Casa da Vó" value={wifiApelido} onChange={e => setWifiApelido(e.target.value)} />
+              </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Nome da Rede (SSID)</label>
                 <input type="text" className="input" value={wifiSsid} onChange={e => setWifiSsid(e.target.value)} required />
@@ -198,34 +272,99 @@ export default function CofrePage() {
                 <label style={{ fontSize: '0.85rem' }}>Rede de Visitantes</label>
               </div>
               <div style={{ display: 'flex', gap: '12px', gridColumn: '1 / -1' }}>
-                <button type="submit" className="btn btn-primary" disabled={salvandoWifi}>{salvandoWifi ? 'Salvando...' : 'Salvar Wi-Fi'}</button>
+                <button type="submit" className="btn btn-primary" disabled={salvandoWifi}>{salvandoWifi ? 'Salvando...' : 'Salvar Rede Wi-Fi'}</button>
                 <button type="button" className="btn btn-secondary" onClick={() => setEditandoWifi(false)}>Cancelar</button>
               </div>
             </form>
-          ) : wifi ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--cor-sucesso-suave)', padding: '16px', borderRadius: 'var(--raio-md)', border: '1px solid var(--cor-sucesso)' }}>
-              <div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginBottom: '4px' }}>NOME DA REDE (SSID)</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--cor-sucesso)' }}>{wifi.nomeRedeSsid}</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--texto-secundario)', marginBottom: '4px' }}>SENHA</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--cor-sucesso)', fontFamily: 'monospace', letterSpacing: verWifi ? '1px' : '4px' }}>
-                    {verWifi ? wifi.senhaRede : '••••••••'}
+          )}
+
+          {redesWifi.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+              {redesWifi.map((r, idx) => {
+                const chave = r.id || r.nomeRedeSsid
+                const verSenha = Boolean(verWifiMap[chave])
+                return (
+                  <div
+                    key={chave}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                      backgroundColor: 'var(--cor-sucesso-suave)',
+                      padding: '16px',
+                      borderRadius: 'var(--raio-md)',
+                      border: '1px solid var(--cor-sucesso)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--texto-secundario)' }}>
+                          {r.apelido || r.nomeRedeSsid} {idx === 0 ? '⭐ Principal' : ''}
+                        </div>
+                        <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--cor-sucesso)' }}>
+                          SSID: {r.nomeRedeSsid}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWifiEditId(r.id || r.nomeRedeSsid)
+                            setWifiApelido(r.apelido || r.nomeRedeSsid)
+                            setWifiSsid(r.nomeRedeSsid)
+                            setWifiSenha(r.senhaRede)
+                            setWifiSeguranca(r.tipoSeguranca || 'WPA2/WPA3')
+                            setWifiVisitante(Boolean(r.ehRedeVisitantes))
+                            setEditandoWifi(true)
+                          }}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                          title="Editar"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleExcluirWifi(chave)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                          title="Excluir"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--cor-sucesso)', fontFamily: 'monospace' }}>
+                        {verSenha ? r.senhaRede : '••••••••'}
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => setVerWifiMap((prev) => ({ ...prev, [chave]: !prev[chave] }))}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.15rem' }}
+                        >
+                          {verSenha ? '🙈' : '👁️'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(r.senhaRede)
+                            alert('Senha copiada!')
+                          }}
+                          className="btn btn-primary"
+                          style={{ padding: '4px 10px', fontSize: '0.78rem' }}
+                        >
+                          📋 Copiar
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <button type="button" onClick={() => setVerWifi(!verWifi)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem' }}>
-                    {verWifi ? '🙈' : '👁️'}
-                  </button>
-                  <button type="button" onClick={() => { navigator.clipboard.writeText(wifi.senhaRede); alert('Senha copiada!') }} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>
-                    📋 Copiar
-                  </button>
-                </div>
-              </div>
+                )
+              })}
             </div>
           ) : (
             <div style={{ padding: '16px', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--raio-md)', textAlign: 'center', color: 'var(--texto-secundario)' }}>
-              Nenhum Wi-Fi cadastrado. Clique em Editar para adicionar.
+              Nenhuma rede Wi-Fi cadastrada. Clique em &quot;+ Nova Rede Wi-Fi&quot; para adicionar.
             </div>
           )}
         </div>
