@@ -93,11 +93,50 @@ const getHojeBelem = () => {
 
   const diaMesNum = parseInt(dataHojeStr.split('-')[2], 10)
 
+  // Calcular início da semana atual (Segunda-feira) no formato YYYY-MM-DD
+  const partes = dataHojeStr.split('-').map(Number)
+  const dataRef = new Date(Date.UTC(partes[0], partes[1] - 1, partes[2]))
+  const diaSemUtc = dataRef.getUTCDay() // 0=Dom, 1=Seg...
+  const diffSeg = diaSemUtc === 0 ? -6 : 1 - diaSemUtc
+  dataRef.setUTCDate(dataRef.getUTCDate() + diffSeg)
+  const inicioSemanaStr = dataRef.toISOString().slice(0, 10)
+  const inicioMesStr = `${dataHojeStr.slice(0, 7)}-01`
+
   return {
     dataHojeStr,
     diaSemanaId: mapaSemana[semanaBruta] || 'Qua',
     diaMesNum,
+    inicioSemanaStr,
+    inicioMesStr,
   }
+}
+
+const deveResetarNoPeriodo = (
+  t: Tarefa,
+  hojeInfo: { dataHojeStr: string; inicioSemanaStr: string; inicioMesStr: string }
+): boolean => {
+  if (!t.esta_concluida) return false
+  if (t.recorrencia === 'unica') return false
+
+  const dataUltima = (t.ultima_conclusao_data || t.atualizado_em || '').slice(0, 10)
+  if (!dataUltima) return true
+
+  if (t.recorrencia === 'diaria') {
+    return dataUltima < hojeInfo.dataHojeStr
+  }
+  if (t.recorrencia === 'semanal') {
+    if (t.dias_semana && t.dias_semana.trim().length > 0) {
+      return dataUltima < hojeInfo.dataHojeStr
+    }
+    return dataUltima < hojeInfo.inicioSemanaStr
+  }
+  if (t.recorrencia === 'mensal') {
+    if (t.dia_mes && t.dia_mes > 0) {
+      return dataUltima < hojeInfo.dataHojeStr
+    }
+    return dataUltima < hojeInfo.inicioMesStr
+  }
+  return dataUltima < hojeInfo.dataHojeStr
 }
 
 export default function RotinasPage() {
@@ -139,10 +178,18 @@ export default function RotinasPage() {
   const [processandoResgate, setProcessandoResgate] = useState(false)
 
   // Estado da data atual (calculada no cliente para compatibilidade com Next.js prerender)
-  const [hoje, setHoje] = useState<{ dataHojeStr: string; diaSemanaId: string; diaMesNum: number }>({
+  const [hoje, setHoje] = useState<{
+    dataHojeStr: string
+    diaSemanaId: string
+    diaMesNum: number
+    inicioSemanaStr: string
+    inicioMesStr: string
+  }>({
     dataHojeStr: '',
     diaSemanaId: 'Qua',
     diaMesNum: 1,
+    inicioSemanaStr: '',
+    inicioMesStr: '',
   })
 
   const carregarDados = async () => {
@@ -188,9 +235,9 @@ export default function RotinasPage() {
         .order('atualizado_em', { ascending: false })
 
       if (tarefasData) {
-        // Reset diário: tarefas recorrentes concluídas em dia anterior voltam a ficar pendentes para o novo ciclo!
+        // Reset por período (Diária, Semanal, Mensal): tarefas concluídas em período anterior voltam a ficar pendentes!
         const tarefasAjustadas: Tarefa[] = tarefasData.map((t) => {
-          if (t.recorrencia !== 'unica' && t.esta_concluida && t.ultima_conclusao_data !== dataHojeInfo.dataHojeStr) {
+          if (deveResetarNoPeriodo(t, dataHojeInfo)) {
             return {
               ...t,
               esta_concluida: false,
@@ -202,9 +249,9 @@ export default function RotinasPage() {
 
         setTarefas(tarefasAjustadas)
 
-        // Sincronizar reset no banco caso haja tarefas de dias anteriores
-        const tarefasParaResetarNoBanco = tarefasData.filter(
-          (t) => t.recorrencia !== 'unica' && t.esta_concluida && t.ultima_conclusao_data !== dataHojeInfo.dataHojeStr
+        // Sincronizar reset no banco caso haja tarefas de períodos anteriores
+        const tarefasParaResetarNoBanco = tarefasData.filter((t) =>
+          deveResetarNoPeriodo(t, dataHojeInfo)
         )
         if (tarefasParaResetarNoBanco.length > 0) {
           for (const t of tarefasParaResetarNoBanco) {
@@ -261,8 +308,7 @@ export default function RotinasPage() {
   // Validador de Disponibilidade, Responsabilidade e Ciclo
   const verificarDisponibilidade = (tarefa: Tarefa) => {
     const concluidaHoje =
-      tarefa.esta_concluida &&
-      (tarefa.recorrencia === 'unica' || tarefa.ultima_conclusao_data === hoje.dataHojeStr)
+      tarefa.esta_concluida && !deveResetarNoPeriodo(tarefa, hoje)
 
     const responsavel = usuarios.find((u) => u.id === tarefa.responsavel_id)
     const ehAberta = Boolean(tarefa.aberta_para_todos || !tarefa.responsavel_id)
@@ -281,26 +327,36 @@ export default function RotinasPage() {
       disponivelHoje = true
       mensagemTempo = concluidaHoje ? 'Concluída hoje' : 'Disponível hoje (Diária)'
     }
-    // 2. SEMANAL: Disponível apenas nos dias da semana selecionados
+    // 2. SEMANAL: Disponível nos dias da semana selecionados (ou qualquer dia se não tiver dia fixo)
     else if (tarefa.recorrencia === 'semanal') {
+      const temDiasEspecificos = Boolean(tarefa.dias_semana && tarefa.dias_semana.trim().length > 0)
       const diasArray = (tarefa.dias_semana || '').split(',').map((d) => d.trim())
-      const ehDiaValido = diasArray.includes(hoje.diaSemanaId)
+      const ehDiaValido = !temDiasEspecificos || diasArray.includes(hoje.diaSemanaId)
 
       if (ehDiaValido) {
         disponivelHoje = true
-        mensagemTempo = concluidaHoje ? 'Concluída hoje' : `Disponível hoje (${hoje.diaSemanaId})`
+        mensagemTempo = concluidaHoje
+          ? 'Concluída neste período'
+          : temDiasEspecificos
+            ? `Disponível hoje (${hoje.diaSemanaId})`
+            : 'Disponível nesta semana'
       } else {
         disponivelHoje = false
         mensagemTempo = `Disponível em: ${tarefa.dias_semana || 'dias agendados'}`
       }
     }
-    // 3. MENSAL: Disponível apenas no dia fixo do mês
+    // 3. MENSAL: Disponível no dia fixo do mês (ou qualquer dia se não tiver dia fixo)
     else if (tarefa.recorrencia === 'mensal') {
-      const ehDiaDoMes = tarefa.dia_mes === hoje.diaMesNum
+      const temDiaFixo = Boolean(tarefa.dia_mes && tarefa.dia_mes > 0)
+      const ehDiaDoMes = !temDiaFixo || tarefa.dia_mes === hoje.diaMesNum
 
       if (ehDiaDoMes) {
         disponivelHoje = true
-        mensagemTempo = concluidaHoje ? 'Concluída hoje' : `Disponível hoje (Dia ${hoje.diaMesNum})`
+        mensagemTempo = concluidaHoje
+          ? 'Concluída neste mês'
+          : temDiaFixo
+            ? `Disponível hoje (Dia ${hoje.diaMesNum})`
+            : 'Disponível neste mês'
       } else {
         disponivelHoje = false
         mensagemTempo = `Disponível todo dia ${tarefa.dia_mes}`

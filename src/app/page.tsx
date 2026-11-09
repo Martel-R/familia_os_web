@@ -47,16 +47,39 @@ export default function DashboardPage() {
           setPendentesCount(countPendentes)
         }
 
-        // 2. Tarefas e Moedas
+        // 2. Tarefas e Moedas (com auto-reset por período no fuso America/Belem)
+        const hojeBelemStr = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Belem',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date())
+
         const { data: rotinas } = await supabase
           .from('tarefas_rotinas')
           .select('*')
           .order('atualizado_em', { ascending: false })
-          .limit(4)
+          .limit(6)
 
         if (rotinas) {
-          setTarefas(rotinas)
-          const moedas = rotinas
+          const rotinasAjustadas = await Promise.all(
+            rotinas.map(async (r: any) => {
+              const dataUltima = (r.ultima_conclusao_data || r.atualizado_em || '').slice(0, 10)
+              const precisaReset =
+                r.esta_concluida &&
+                r.recorrencia !== 'unica' &&
+                (!dataUltima || dataUltima < hojeBelemStr)
+              if (precisaReset) {
+                const payloadReset: any = { esta_concluida: false }
+                if (r.aberta_para_todos) payloadReset.responsavel_id = null
+                await supabase.from('tarefas_rotinas').update(payloadReset).eq('id', r.id)
+                return { ...r, ...payloadReset }
+              }
+              return r
+            })
+          )
+          setTarefas(rotinasAjustadas.slice(0, 4))
+          const moedas = rotinasAjustadas
             .filter((r) => r.esta_concluida)
             .reduce((acc, r) => acc + (r.moedas_recompensa || 0), 0)
           setMoedasTotal(moedas)
